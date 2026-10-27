@@ -1,0 +1,16 @@
+[project]
+name = "graphcalc"
+version = "0.1.0"
+description = "GraphCalc: a local CAS graphing calculator in the browser"
+requires-python = ">=3.12"
+dependencies = ["sympy"]
+
+[tool.ruff]
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.coverage.run]
+source = ["graphcalc"]
+omit = ["*/__main__.py"]

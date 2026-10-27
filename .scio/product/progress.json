@@ -1,0 +1,230 @@
+{
+  "product": "graphcalc",
+  "stack": "python",
+  "bootstrap_commit": null,
+  "build_thread": null,
+  "milestones": [],
+  "features": [
+    {
+      "id": "P1",
+      "description": "The package starts, reports its version, serves a health check on 127.0.0.1, and has one passing unittest smoke test.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P2",
+      "description": "GET / serves one HTML page with four tabs (Calculator, Graphs, Lists & Statistics, CAS) plus plain CSS and JS files, with no external resources and no build step.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P3",
+      "description": "POST /api/calc/evaluate takes {\"expr\":str,\"mode\":\"rad\"|\"deg\" (optional)} and answers {\"expr\",\"exact\",\"decimal\",\"complex\",\"domain_error\"} (complex and domain_error are null unless set). It parses + - * / ^, parentheses and implied multiplication. Decimals are strings with 12 significant digits and no trailing zeros.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P4",
+      "description": "Supports sin, cos, tan, asin, acos, atan, ln, log (base 10), sqrt, abs, n!, pi and e, with an angle mode of \"rad\" (the default) or \"deg\".",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P5",
+      "description": "Non-real results return 200 with an exact form and a rectangular complex form {\"real\",\"imag\"}. 200 with a domain_error only when the math has no value (1/0, 0/0). 400 for client mistakes: syntax, missing or invalid parameters, redefining a constant. An undefined name is a symbol (as on the TI-Nspire CAS); decimal is null while a free name remains.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P6",
+      "description": "Each successful evaluation is added to the history. `ans` recalls the last result.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P7",
+      "description": "`name:=expr` defines a variable and `f(x):=expr` defines a function; the evaluate response gives the defined value or body as exact. Both are usable in later expressions and can be listed.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P8",
+      "description": "The Calculator tab is wired to the calculator endpoints.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P9",
+      "description": "Variables, functions, lists and history are held in memory and written through atomically to a JSON file (--state PATH, default ./graphcalc_state.json), which is loaded again on startup. --in-memory turns off disk writes.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P10",
+      "description": "POST /api/graph/plot takes {\"functions\":{\"f1\"..\"f4\":expr},\"window\":{\"xmin\",\"xmax\",\"ymin\",\"ymax\"},\"samples\":int} and answers {\"x\":[numbers],\"series\":{\"f1\":{\"color\":\"#rrggbb\",\"y\":[number|null]}}}. Non-real, infinite or nan y-values are null so the curve shows a gap.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P11",
+      "description": "POST /api/graph/window takes {\"action\":\"zoom_in\"|\"zoom_out\"|\"pan\"|\"standard\",\"factor\",\"dx\",\"dy\",\"window\"} and answers {\"xmin\",\"xmax\",\"ymin\",\"ymax\"}; standard is -10..10 on both axes.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P12",
+      "description": "POST /api/graph/analyze takes {\"operation\":\"value\"|\"zero\"|\"minimum\"|\"maximum\"|\"intersection\",\"f\":expr,\"g\":expr (intersection),\"x\" (value),\"lower\",\"upper\"} and answers {\"operation\",\"x\",\"y\",\"domain_error\"} with decimals of 12 significant digits.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P13",
+      "description": "POST /api/graph/table takes {\"functions\",\"start\",\"step\",\"rows\"} and answers {\"x\":[str],\"columns\":{\"f1\":[str|null]}}.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P14",
+      "description": "The Graphs tab is wired to the graph endpoints and draws on the canvas.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P15",
+      "description": "Named lists that can be created, read, updated and deleted through /api/lists, and used in expressions.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P16",
+      "description": "POST /api/stats/onevar takes {\"list\":name} and answers n (integer) plus mean, median, sum, sx, sigma_x, min, q1, q3 and max, each {\"exact\",\"decimal\"} (TI quartile method).",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P17",
+      "description": "POST /api/stats/regression takes {\"model\":\"linear\"|\"quadratic\",\"x\":[str],\"y\":[str]} and answers {\"model\",\"coefficients\":{\"a\",\"b\"[,\"c\"]},\"r2\",\"points\":[[x,y]],\"curve\":[[x,y]]}. Coefficients and r2 are decimal strings with 12 significant digits.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P18",
+      "description": "The Lists & Statistics tab is wired to the list and statistics endpoints.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P19",
+      "description": "POST /api/cas/simplify, /expand and /factor take {\"expr\"} and answer {\"result\"} in exact form with ^ for powers.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P20",
+      "description": "POST /api/cas/derivative {\"expr\",\"var\"}, /integral {\"expr\",\"var\",\"lower\",\"upper\" (optional)} and /limit {\"expr\",\"var\",\"point\",\"dir\" (optional)} answer {\"result\"}. lower, upper and point each accept a number or an expression string such as \"pi\" or \"oo\".",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P21",
+      "description": "POST /api/cas/solve takes {\"equation\":\"lhs=rhs\" or an expression taken to equal 0,\"var\"} and answers {\"solutions\":[str]} in exact form.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P22",
+      "description": "The CAS tab is wired to every CAS endpoint.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    }
+  ],
+  "updated": "2026-10-27T22:42:34+00:00"
+}

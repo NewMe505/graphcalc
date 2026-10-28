@@ -10,6 +10,21 @@ python -m graphcalc --version
 ```
 <!-- scio:run-end -->
 
+## Use
+
+Start the server, e.g. `python -m graphcalc --port 8000 --in-memory`, then open
+`http://127.0.0.1:8000/` in a browser. `GET /` serves one plain HTML/CSS/JS
+page (no build step, no CDN or other external resources) with four tabs:
+Calculator, Graphs, Lists & Statistics, and CAS. The page only draws what the
+JSON API returns.
+
+The UI shell is served from two routes:
+- `GET /` -- `text/html`, the tab page (`tab-calculator`, `tab-graphs`,
+  `tab-lists`, `tab-cas`, and a `graph-canvas` canvas on the Graphs tab).
+- `GET /static/<name>` -- the page's own `.js`/`.css`/`.html` files with an
+  explicit content type (e.g. `application/javascript`, `text/css`). Any
+  other path, including a traversal attempt, answers a JSON 404, never a 500.
+
 ## Develop
 
 ```

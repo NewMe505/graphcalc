@@ -1,4 +1,8 @@
-"""Command line entry point: the walking skeleton with a health endpoint."""
+"""Command line entry point: health endpoint plus the static UI shell.
+
+Serves JSON at /health and the plain HTML/CSS/JS page (and its /static/<name>
+assets) that the browser-facing tabs are built on; see Handler.do_GET.
+"""
 
 import argparse
 import json
@@ -79,6 +83,16 @@ def _serve_static(handler, path):
 
 
 class Handler(BaseHTTPRequestHandler):
+    """The product's only HTTP handler: health check, UI shell, static assets.
+
+    Routes matched on the exact request path (no query-string handling):
+    - /health          -> 200 JSON {"status": "ok"}
+    - /                -> 200 text/html, the four-tab index page
+    - /static/<name>   -> see _serve_static for the allowlist and the
+                           traversal/NUL/backslash checks
+    - anything else    -> 404 JSON {"error": ...}, never a 500
+    """
+
     def do_GET(self):
         if self.path == HEALTH_PATH:
             _send_json(self, 200, {"status": "ok"})

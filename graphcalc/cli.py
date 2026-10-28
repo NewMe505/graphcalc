@@ -1,7 +1,10 @@
-"""Command line entry point: health endpoint plus the static UI shell.
+"""Command line entry point: health endpoint, static UI shell, calc API.
 
 Serves JSON at /health and the plain HTML/CSS/JS page (and its /static/<name>
-assets) that the browser-facing tabs are built on; see Handler.do_GET.
+assets) that the browser-facing tabs are built on; see Handler.do_GET. The
+math API lives under /api/calc/... -- see Handler.do_POST and
+_handle_calc_evaluate for POST /api/calc/evaluate, which defers the actual
+parsing and evaluation to graphcalc.calc.
 """
 
 import argparse

@@ -17,9 +17,19 @@ class _IdCollector(HTMLParser):
                 self.tags_by_id[value] = tag
 
 
-def test_index_page():
+def _start_server():
     server = HTTPServer(("127.0.0.1", 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server
+
+
+def _media_type(content_type_header):
+    """The Content-Type value with any ';charset=...' parameter stripped."""
+    return content_type_header.split(";", 1)[0].strip()
+
+
+def test_index_page():
+    server = _start_server()
     try:
         base = f"http://127.0.0.1:{server.server_port}"
         with urllib.request.urlopen(base + "/") as res:
@@ -35,3 +45,27 @@ def test_index_page():
     assert parser.tags_by_id["graph-canvas"] == "canvas"
     for element_id in ("tab-calculator", "tab-graphs", "tab-lists", "tab-cas"):
         assert element_id in parser.tags_by_id
+
+
+def test_static_content_types_js():
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urllib.request.urlopen(base + "/static/app.js") as res:
+            assert res.status == 200
+            assert _media_type(res.headers.get("Content-Type", "")) == "application/javascript"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_static_content_types_css():
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urllib.request.urlopen(base + "/static/style.css") as res:
+            assert res.status == 200
+            assert _media_type(res.headers.get("Content-Type", "")) == "text/css"
+    finally:
+        server.shutdown()
+        server.server_close()

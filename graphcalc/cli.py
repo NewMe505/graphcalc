@@ -5,6 +5,7 @@ import json
 import os
 import pathlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import unquote
 
 from graphcalc import __version__
 
@@ -13,6 +14,14 @@ HEALTH_PATH = "/health"
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
 INDEX_PATH = STATIC_DIR / "index.html"
+STATIC_PREFIX = "/static/"
+
+# Only extensions we explicitly know how to label get served; anything else 404s.
+STATIC_CONTENT_TYPES = {
+    ".js": "application/javascript",
+    ".css": "text/css",
+    ".html": "text/html",
+}
 
 
 def _send_json(handler, status, payload):
@@ -32,6 +41,27 @@ def _send_bytes(handler, status, content_type, body):
     handler.wfile.write(body)
 
 
+def _serve_static(handler, path):
+    """Serve a file under STATIC_DIR for a /static/<name> request.
+
+    The extension must be in STATIC_CONTENT_TYPES and the resolved path must
+    stay inside STATIC_DIR; either failure, or a missing file, is a JSON 404.
+    """
+    name = unquote(path[len(STATIC_PREFIX) :])
+    content_type = STATIC_CONTENT_TYPES.get(pathlib.PurePosixPath(name).suffix)
+    if content_type is None:
+        _send_json(handler, 404, {"error": f"not found: {path}"})
+        return
+    try:
+        candidate = (STATIC_DIR / name).resolve()
+        candidate.relative_to(STATIC_DIR)
+        body = candidate.read_bytes()
+    except (ValueError, OSError):
+        _send_json(handler, 404, {"error": f"not found: {path}"})
+        return
+    _send_bytes(handler, 200, content_type, body)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == HEALTH_PATH:
@@ -39,6 +69,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == "/":
             _send_bytes(self, 200, "text/html; charset=utf-8", INDEX_PATH.read_bytes())
+            return
+        if self.path.startswith(STATIC_PREFIX):
+            _serve_static(self, self.path)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

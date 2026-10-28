@@ -3,11 +3,16 @@
 import argparse
 import json
 import os
+import pathlib
 from http.server import BaseHTTPRequestHandler, HTTPServer
 
 from graphcalc import __version__
 
 HEALTH_PATH = "/health"
+
+# The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
+STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
+INDEX_PATH = STATIC_DIR / "index.html"
 
 
 def _send_json(handler, status, payload):
@@ -19,10 +24,21 @@ def _send_json(handler, status, payload):
     handler.wfile.write(body)
 
 
+def _send_bytes(handler, status, content_type, body):
+    handler.send_response(status)
+    handler.send_header("Content-Type", content_type)
+    handler.send_header("Content-Length", str(len(body)))
+    handler.end_headers()
+    handler.wfile.write(body)
+
+
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         if self.path == HEALTH_PATH:
             _send_json(self, 200, {"status": "ok"})
+            return
+        if self.path == "/":
+            _send_bytes(self, 200, "text/html; charset=utf-8", INDEX_PATH.read_bytes())
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

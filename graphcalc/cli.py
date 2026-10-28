@@ -104,28 +104,36 @@ def _handle_calc_evaluate(handler):
     from calc.evaluate (bad syntax, an invalid mode) is a JSON 400 -- never
     a 500. The sympy-backed calc module is imported lazily so every other
     route keeps working even if sympy were ever unavailable.
+
+    Everything above is wrapped in a catch-all: any exception this function
+    did not anticipate (e.g. something calc.evaluate's own try/except does
+    not cover) is still turned into a JSON 400, never left to propagate into
+    a 500. This handler must never answer with a 500.
     """
     from graphcalc import calc
 
     try:
-        payload = _read_json_body(handler)
-    except ValueError:
-        _send_json(handler, 400, {"error": "invalid JSON body"})
-        return
-    if not isinstance(payload, dict):
-        _send_json(handler, 400, {"error": "invalid JSON body"})
-        return
-    expr = payload.get("expr")
-    if expr is None:
-        _send_json(handler, 400, {"error": "missing parameter: expr"})
-        return
-    mode = payload.get("mode", "rad")
-    try:
-        result = calc.evaluate(expr, mode)
-    except calc.CalcError as exc:
-        _send_json(handler, 400, {"error": str(exc)})
-        return
-    _send_json(handler, 200, result)
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        expr = payload.get("expr")
+        if expr is None:
+            _send_json(handler, 400, {"error": "missing parameter: expr"})
+            return
+        mode = payload.get("mode", "rad")
+        try:
+            result = calc.evaluate(expr, mode)
+        except calc.CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"unexpected error: {exc}"})
 
 
 class Handler(BaseHTTPRequestHandler):

@@ -14,6 +14,7 @@ from urllib.parse import unquote
 from graphcalc import __version__
 
 HEALTH_PATH = "/health"
+CALC_EVALUATE_PATH = "/api/calc/evaluate"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -82,15 +83,61 @@ def _serve_static(handler, path):
     _send_bytes(handler, 200, content_type, body)
 
 
+def _read_json_body(handler):
+    """Read and JSON-decode the request body, or {} when there is none.
+
+    Raises ValueError (the base of UnicodeDecodeError and
+    json.JSONDecodeError, and what int() raises on a bad Content-Length)
+    for any malformed body; the caller turns that into a JSON 400.
+    """
+    length = int(handler.headers.get("Content-Length", 0) or 0)
+    raw = handler.rfile.read(length) if length else b""
+    if not raw:
+        return {}
+    return json.loads(raw.decode("utf-8"))
+
+
+def _handle_calc_evaluate(handler):
+    """POST /api/calc/evaluate: {"expr","mode"} -> calc.evaluate's dict, 200 JSON.
+
+    A malformed body, a non-object body, a missing "expr", or a CalcError
+    from calc.evaluate (bad syntax, an invalid mode) is a JSON 400 -- never
+    a 500. The sympy-backed calc module is imported lazily so every other
+    route keeps working even if sympy were ever unavailable.
+    """
+    from graphcalc import calc
+
+    try:
+        payload = _read_json_body(handler)
+    except ValueError:
+        _send_json(handler, 400, {"error": "invalid JSON body"})
+        return
+    if not isinstance(payload, dict):
+        _send_json(handler, 400, {"error": "invalid JSON body"})
+        return
+    expr = payload.get("expr")
+    if expr is None:
+        _send_json(handler, 400, {"error": "missing parameter: expr"})
+        return
+    mode = payload.get("mode", "rad")
+    try:
+        result = calc.evaluate(expr, mode)
+    except calc.CalcError as exc:
+        _send_json(handler, 400, {"error": str(exc)})
+        return
+    _send_json(handler, 200, result)
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
     Routes matched on the exact request path (no query-string handling):
-    - /health          -> 200 JSON {"status": "ok"}
-    - /                -> 200 text/html, the four-tab index page
-    - /static/<name>   -> see _serve_static for the allowlist and the
-                           traversal/NUL/backslash checks
-    - anything else    -> 404 JSON {"error": ...}, never a 500
+    - /health                -> 200 JSON {"status": "ok"}
+    - /                      -> 200 text/html, the four-tab index page
+    - /static/<name>         -> see _serve_static for the allowlist and the
+                                 traversal/NUL/backslash checks
+    - POST /api/calc/evaluate -> see _handle_calc_evaluate
+    - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
     def do_GET(self):
@@ -102,6 +149,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path.startswith(STATIC_PREFIX):
             _serve_static(self, self.path)
+            return
+        _send_json(self, 404, {"error": f"not found: {self.path}"})
+
+    def do_POST(self):
+        if self.path == CALC_EVALUATE_PATH:
+            _handle_calc_evaluate(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

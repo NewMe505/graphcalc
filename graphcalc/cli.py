@@ -44,19 +44,35 @@ def _send_bytes(handler, status, content_type, body):
 def _serve_static(handler, path):
     """Serve a file under STATIC_DIR for a /static/<name> request.
 
-    The extension must be in STATIC_CONTENT_TYPES and the resolved path must
-    stay inside STATIC_DIR; either failure, or a missing file, is a JSON 404.
+    The raw request path is percent-decoded by hand (never trust the client's
+    normalization). A NUL byte, a backslash or an absolute segment is refused
+    outright; the resolved path must then stay inside STATIC_DIR.resolve().
+    Any of those failures, an unknown extension, or a missing file, is a
+    JSON 404 -- never a 500.
     """
-    name = unquote(path[len(STATIC_PREFIX) :])
+    try:
+        name = unquote(path[len(STATIC_PREFIX) :])
+    except (UnicodeDecodeError, ValueError):
+        _send_json(handler, 404, {"error": f"not found: {path}"})
+        return
+    if "\x00" in name or "\\" in name or pathlib.PurePosixPath(name).is_absolute():
+        _send_json(handler, 404, {"error": f"not found: {path}"})
+        return
     content_type = STATIC_CONTENT_TYPES.get(pathlib.PurePosixPath(name).suffix)
     if content_type is None:
         _send_json(handler, 404, {"error": f"not found: {path}"})
         return
     try:
         candidate = (STATIC_DIR / name).resolve()
-        candidate.relative_to(STATIC_DIR)
-        body = candidate.read_bytes()
     except (ValueError, OSError):
+        _send_json(handler, 404, {"error": f"not found: {path}"})
+        return
+    if not candidate.is_relative_to(STATIC_DIR.resolve()):
+        _send_json(handler, 404, {"error": f"not found: {path}"})
+        return
+    try:
+        body = candidate.read_bytes()
+    except OSError:
         _send_json(handler, 404, {"error": f"not found: {path}"})
         return
     _send_bytes(handler, 200, content_type, body)

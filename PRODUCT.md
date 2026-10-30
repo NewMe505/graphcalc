@@ -122,7 +122,7 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 - [ ] GET /static/app.js contains the paths /api/cas/simplify, /api/cas/expand, /api/cas/factor, /api/cas/derivative, /api/cas/integral, /api/cas/limit and /api/cas/solve
 
 ## Quality bar (release gate)
-- Tests use only the stdlib unittest module (python -m unittest discover); line coverage is at least 85%, measured by coverage.py
+- Tests run with pytest (python -m pytest) and pytest-cov; line coverage is at least 85%
 - coverage.py, ruff and mypy are CI/dev-only tools and are never runtime dependencies
 - An end-to-end HTTP suite starts the server with --in-memory and checks a fixed list of canonical expressions against exact expected JSON covering arithmetic, symbolic math, complex output, variables, functions, lists, history and graph coordinates
 - No request can cause a 500: fuzzed malformed expressions get 400 with a JSON error
@@ -133,7 +133,7 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 - A dependency audit (pip-audit) reports no known vulnerabilities
 - A secret scan of the repository finds no secrets
 - The README run instructions (install sympy, then python -m graphcalc --port 8000) are run in CI
-- Targets Python 3.11 or higher
+- Targets Python 3.12 or newer
 
 ## Approved dependencies
 - sympy

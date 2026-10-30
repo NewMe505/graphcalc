@@ -22,6 +22,7 @@ from sympy import (
     atan,
     cos,
     exp,
+    factorial,
     log,
     pi,
     simplify,
@@ -31,6 +32,7 @@ from sympy import (
 )
 from sympy.parsing.sympy_parser import (
     convert_xor,
+    factorial_notation,
     implicit_multiplication_application,
     parse_expr,
     standard_transformations,
@@ -41,12 +43,14 @@ from graphcalc.numfmt import format_decimal
 _TRANSFORMATIONS = standard_transformations + (
     implicit_multiplication_application,
     convert_xor,
+    factorial_notation,
 )
 
 # Only the sympy constructors parse_expr's transformations emit -- never the
 # real Python builtins. Setting "__builtins__" to {} is what keeps eval()
 # from silently getting the real ones back (the default when a global dict
-# omits the key at all).
+# omits the key at all). factorial_notation's postfix "!" expands to a call
+# to a bare "factorial" name, so that constructor belongs here too.
 _GLOBAL_DICT = {
     "__builtins__": {},
     "Integer": Integer,
@@ -54,6 +58,7 @@ _GLOBAL_DICT = {
     "Rational": Rational,
     "Symbol": Symbol,
     "Function": Function,
+    "factorial": factorial,
 }
 
 

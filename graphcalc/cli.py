@@ -4,7 +4,9 @@ Serves JSON at /health and the plain HTML/CSS/JS page (and its /static/<name>
 assets) that the browser-facing tabs are built on; see Handler.do_GET. The
 math API lives under /api/calc/... -- see Handler.do_POST and
 _handle_calc_evaluate for POST /api/calc/evaluate, which defers the actual
-parsing and evaluation to graphcalc.calc.
+parsing and evaluation to graphcalc.calc. Every successful evaluation is
+appended to a graphcalc.history.HistoryStore held on the HTTPServer instance
+(see build_server and _history_store); GET /api/calc/history reads it back.
 """
 
 import argparse
@@ -15,9 +17,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
 from graphcalc import __version__
+from graphcalc.history import InMemoryHistoryStore
 
 HEALTH_PATH = "/health"
 CALC_EVALUATE_PATH = "/api/calc/evaluate"
+CALC_HISTORY_PATH = "/api/calc/history"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -100,6 +104,26 @@ def _read_json_body(handler):
     return json.loads(raw.decode("utf-8"))
 
 
+def _history_store(handler):
+    """Return the HTTPServer's history store, creating a default if missing.
+
+    build_server() always sets one up front; this fallback only matters for
+    a server built by calling HTTPServer(..., Handler) directly (as tests
+    that don't care about history do), so every request path still has a
+    store to read from or append to.
+    """
+    store = getattr(handler.server, "history_store", None)
+    if store is None:
+        store = InMemoryHistoryStore()
+        handler.server.history_store = store
+    return store
+
+
+def _handle_calc_history_get(handler):
+    """GET /api/calc/history -> 200 {"history": [...]}, oldest entry first."""
+    _send_json(handler, 200, {"history": _history_store(handler).entries()})
+
+
 def _handle_calc_evaluate(handler):
     """POST /api/calc/evaluate: {"expr","mode"} -> calc.evaluate's dict, 200 JSON.
 
@@ -107,6 +131,11 @@ def _handle_calc_evaluate(handler):
     from calc.evaluate (bad syntax, an invalid mode) is a JSON 400 -- never
     a 500. The sympy-backed calc module is imported lazily so every other
     route keeps working even if sympy were ever unavailable.
+
+    Only a successful evaluation (no CalcError, and result["domain_error"]
+    is None) is appended to the history store as
+    {"expr": <original input>, "exact": ..., "decimal": ...}; a 400 or a
+    domain_error (division by zero, undefined) adds nothing.
 
     Everything above is wrapped in a catch-all: any exception this function
     did not anticipate (e.g. something calc.evaluate's own try/except does
@@ -134,6 +163,10 @@ def _handle_calc_evaluate(handler):
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})
             return
+        if result["domain_error"] is None:
+            _history_store(handler).append(
+                {"expr": expr, "exact": result["exact"], "decimal": result["decimal"]}
+            )
         _send_json(handler, 200, result)
     except Exception as exc:  # catch-all: this endpoint must never answer with a 500
         _send_json(handler, 400, {"error": f"unexpected error: {exc}"})
@@ -148,6 +181,7 @@ class Handler(BaseHTTPRequestHandler):
     - /static/<name>         -> see _serve_static for the allowlist and the
                                  traversal/NUL/backslash checks
     - POST /api/calc/evaluate -> see _handle_calc_evaluate
+    - GET /api/calc/history   -> see _handle_calc_history_get
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -161,6 +195,9 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith(STATIC_PREFIX):
             _serve_static(self, self.path)
             return
+        if self.path == CALC_HISTORY_PATH:
+            _handle_calc_history_get(self)
+            return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 
     def do_POST(self):
@@ -173,9 +210,17 @@ class Handler(BaseHTTPRequestHandler):
         return
 
 
-def build_server(port):
+def build_server(port, history_store=None):
+    """Build the HTTPServer, with a history store attached as .history_store.
+
+    `history_store` lets a caller (tests, mainly) inject a fresh
+    HistoryStore; the default is a new InMemoryHistoryStore per server so
+    unrelated servers never share history.
+    """
     host = os.environ.get("HOST", "127.0.0.1")  # the Dockerfile sets 0.0.0.0
-    return HTTPServer((host, port), Handler)
+    server = HTTPServer((host, port), Handler)
+    server.history_store = history_store if history_store is not None else InMemoryHistoryStore()
+    return server
 
 
 # Process lifecycle: the black-box acceptance tests run it against the started app;

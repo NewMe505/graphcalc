@@ -74,6 +74,26 @@
   function definitions, `GET /api/calc/vars`, and the `--state` CLI flag
   (P9) are separate, later steps.
 
+- Function definitions (P7/S2): `"f(x):=expr"` (or `"f(x,y):=expr"`, one or
+  more comma-separated params) evaluates `expr` with the params bound as
+  plain symbols, stores `{"params", "body"}` under `f`, and answers 200
+  with `"exact"` set to the body in caret form (e.g. `"x^2 + 1"`). A later
+  call (e.g. `"f(3)"`) evaluates it as a sympy `Lambda`; the wrong number of
+  arguments answers 400, never a 500. Redefining a reserved name as a
+  function (e.g. `"pi(x):=x"`) is rejected the same way a variable
+  redefinition is.
+
+- Listing variables and functions (P7/S3): `GET /api/calc/vars` answers 200
+  `{"variables": {name: exact}, "functions": {name: {"params", "body"}}}`
+  for everything stored so far, e.g. after `"a:=5"` and `"f(x):=x^2+1"`:
+  `{"variables": {"a": "5"}, "functions": {"f": {"params": ["x"], "body":
+  "x^2 + 1"}}}`. Both values and bodies are rendered in caret form, same as
+  a function definition's own response. Redefining `pi`, `e` or `I` (or any
+  other reserved name) is rejected with 400
+  `{"error": "cannot redefine constant <name>"}` before anything is
+  evaluated or stored, so the constant still evaluates normally afterwards
+  and state is left unchanged.
+
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
   byte, a backslash or an absolute segment in the decoded name outright, and

@@ -14,7 +14,8 @@ A "name:=expr" input (graphcalc.calc.parse_definition) is detected before
 the normal evaluate path and stores the result in a graphcalc.state.CalcState
 held on the HTTPServer instance (see build_server and _state), separate from
 the history store -- history and state are not yet unified behind one
-object; that is a later feature (P9).
+object; that is a later feature (P9). GET /api/calc/vars reads that same
+CalcState back as JSON (see _handle_calc_vars_get).
 """
 
 import argparse
@@ -31,6 +32,7 @@ from graphcalc.state import CalcState
 HEALTH_PATH = "/health"
 CALC_EVALUATE_PATH = "/api/calc/evaluate"
 CALC_HISTORY_PATH = "/api/calc/history"
+CALC_VARS_PATH = "/api/calc/vars"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -159,6 +161,29 @@ def _handle_calc_history_delete(handler):
     """
     _history_store(handler).clear()
     _send_json(handler, 200, {"history": []})
+
+
+def _handle_calc_vars_get(handler):
+    """GET /api/calc/vars -> 200 {"variables": {...}, "functions": {...}}.
+
+    `_state(handler).variables()` and `.functions()` hold plain sympy str()
+    values/bodies ("**" notation, directly re-sympify()-able -- see
+    graphcalc.state.CalcState). Both are rendered through calc.to_caret the
+    same way a function definition's own evaluate response already is
+    (plan step P7/S2), so a value or body with a power reads with "^" here
+    too (e.g. a stored body "x**2 + 1" -> "x^2 + 1"); a plain value like
+    "5" is unchanged. This is read-only: it never evaluates or stores
+    anything, so it cannot itself trigger names.check_not_constant.
+    """
+    from graphcalc import calc
+
+    state = _state(handler)
+    variables = {name: calc.to_caret(value) for name, value in state.variables().items()}
+    functions = {
+        name: {"params": spec["params"], "body": calc.to_caret(spec["body"])}
+        for name, spec in state.functions().items()
+    }
+    _send_json(handler, 200, {"variables": variables, "functions": functions})
 
 
 def _handle_calc_evaluate(handler):
@@ -301,6 +326,7 @@ class Handler(BaseHTTPRequestHandler):
     - POST /api/calc/evaluate   -> see _handle_calc_evaluate
     - GET /api/calc/history     -> see _handle_calc_history_get
     - DELETE /api/calc/history  -> see _handle_calc_history_delete
+    - GET /api/calc/vars        -> see _handle_calc_vars_get
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -316,6 +342,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == CALC_HISTORY_PATH:
             _handle_calc_history_get(self)
+            return
+        if self.path == CALC_VARS_PATH:
+            _handle_calc_vars_get(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

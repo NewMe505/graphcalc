@@ -35,6 +35,17 @@ given a path, it loads that file's JSON (defaulting a missing "functions"
 key to {}, so a state file written before functions existed still loads)
 and writes through atomically after every change, so a new CalcState built
 later on the same path picks up where the previous one left off.
+
+Plan step P7/S3 (listing and protected constants): GET /api/calc/vars
+(graphcalc.cli._handle_calc_vars_get) reads the same CalcState back as
+{"variables": {name: exact}, "functions": {name: {"params", "body"}}},
+running every value and body through graphcalc.calc.to_caret -- the same
+formatter a function definition's own response already uses -- so a stored
+"x**2" prints as "x^2" here too. names.check_not_constant already rejects
+pi/e/I (and the rest of RESERVED_NAMES) before anything is evaluated or
+stored (see P7/S1 above), so state never changes on a rejected definition;
+this step just adds tests pinning that for "e" and "I" specifically, plus
+the vars listing itself.
 """
 
 import json
@@ -59,6 +70,14 @@ def _post(base, path, payload):
     )
     try:
         with urllib.request.urlopen(req) as res:
+            return res.status, json.loads(res.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        return err.code, json.loads(err.read().decode("utf-8"))
+
+
+def _get(base, path):
+    try:
+        with urllib.request.urlopen(base + path) as res:
             return res.status, json.loads(res.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
         return err.code, json.loads(err.read().decode("utf-8"))
@@ -185,7 +204,7 @@ def test_defining_function_body_variable_depends_on_prior_definition(server):
 # ---- redefining a reserved constant is rejected ----
 
 
-def test_redefining_pi_is_rejected(server):
+def test_calc_vars_redefining_pi_rejected(server):
     _srv, base = server
     status, body = _post(base, "/api/calc/evaluate", {"expr": "pi:=3"})
     assert status == 400
@@ -195,6 +214,11 @@ def test_redefining_pi_is_rejected(server):
     status, body = _post(base, "/api/calc/evaluate", {"expr": "2pi"})
     assert status == 200
     assert body["exact"] == "2*pi"
+
+    # Nothing was ever stored by the rejected definition.
+    status, body = _get(base, "/api/calc/vars")
+    assert status == 200
+    assert body == {"variables": {}, "functions": {}}
 
 
 # ---- a domain error on the right-hand side stores nothing ----
@@ -270,6 +294,65 @@ def test_redefining_constant_as_a_function_name_is_rejected(server):
     status, body = _post(base, "/api/calc/evaluate", {"expr": "pi(x):=x"})
     assert status == 400
     assert body == {"error": "cannot redefine constant pi"}
+
+
+# ---- GET /api/calc/vars: lists stored variables and functions (P7/S3) ----
+
+
+def test_calc_vars_lists_defined_variable_and_function(server):
+    _srv, base = server
+    _post(base, "/api/calc/evaluate", {"expr": "a:=5"})
+    _post(base, "/api/calc/evaluate", {"expr": "f(x):=x^2+1"})
+
+    status, body = _get(base, "/api/calc/vars")
+    assert status == 200
+    assert body == {
+        "variables": {"a": "5"},
+        "functions": {"f": {"params": ["x"], "body": "x^2 + 1"}},
+    }
+
+
+def test_calc_vars_empty_before_any_definition(server):
+    _srv, base = server
+    status, body = _get(base, "/api/calc/vars")
+    assert status == 200
+    assert body == {"variables": {}, "functions": {}}
+
+
+def test_calc_vars_caret_for_variables(server):
+    _srv, base = server
+    _post(base, "/api/calc/evaluate", {"expr": "b:=x^2"})
+
+    status, body = _get(base, "/api/calc/vars")
+    assert status == 200
+    assert body["variables"] == {"b": "x^2"}
+
+
+def test_calc_vars_redefining_e_or_i_rejected(server):
+    _srv, base = server
+    _post(base, "/api/calc/evaluate", {"expr": "a:=5"})
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "e:=3"})
+    assert status == 400
+    assert body == {"error": "cannot redefine constant e"}
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "I:=3"})
+    assert status == 400
+    assert body == {"error": "cannot redefine constant I"}
+
+    # Nothing beyond the original "a" was ever stored.
+    status, body = _get(base, "/api/calc/vars")
+    assert status == 200
+    assert body == {"variables": {"a": "5"}, "functions": {}}
+
+
+def test_calc_vars_pi_still_evaluates(server):
+    _srv, base = server
+    _post(base, "/api/calc/evaluate", {"expr": "pi:=3"})
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "pi"})
+    assert status == 200
+    assert body["exact"] == "pi"
 
 
 # ---- CalcState: disk persistence and reload (new instance, same file) ----

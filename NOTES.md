@@ -3,6 +3,36 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P7/S3 (2026-10-31): `GET /api/calc/vars` in `graphcalc/cli.py`.
+  `_handle_calc_vars_get` reads the HTTPServer's `graphcalc.state.CalcState`
+  (same `_state(handler)` helper S1 added) and answers 200
+  `{"variables": {name: exact}, "functions": {name: {"params", "body"}}}`.
+  Concretely, after `"a:=5"` and the S2 function-definition syntax
+  `"f(x):=x^2+1"` (or `"f(x,y):=expr"` for more than one param), `GET
+  /api/calc/vars` answers exactly
+  `{"variables": {"a": "5"}, "functions": {"f": {"params": ["x"], "body":
+  "x^2 + 1"}}}`; redefining `pi`, `e` or `I` (as either a variable or a
+  function name) still answers 400 `{"error": "cannot redefine constant
+  <name>"}` and leaves this response unchanged.
+  Both the variable values and the function bodies are run through
+  `calc.to_caret` -- the same formatter S2's function-definition response
+  already uses -- so a stored `"x**2 + 1"` prints as `"x^2 + 1"` here too
+  (pinned by `test_calc_vars_caret_for_variables`,
+  since S1/S2's own tests only ever exercised a caret-free value like `"5"`
+  for a variable). No new design decision: `names.check_not_constant`
+  already rejects `pi`/`e`/`I` (and the rest of `RESERVED_NAMES`) *before*
+  `calc.evaluate` or `CalcState.set_variable`/`set_function` ever run (S1's
+  `_handle_calc_evaluate` calls it first thing inside the
+  `parse_definition`/`parse_function_definition` branches), so state is
+  already guaranteed unchanged on a rejected definition -- this step only
+  adds `test_calc_vars_redefining_e_or_i_rejected` and
+  `test_calc_vars_pi_still_evaluates` to pin that explicitly for `e` and `I`,
+  alongside `pi` (already covered by `test_calc_vars_redefining_pi_rejected`,
+  renamed from S1's `test_redefining_pi_is_rejected` so every test proving
+  this step's acceptance criteria -- the vars listing and the `pi`/`e`/`I`
+  rejection -- is collectible with `-k calc_vars`). `vars` itself is read-only -- it never
+  evaluates or stores anything, so it has no `check_not_constant` call of
+  its own.
 - P7/S1 (2026-10-31): `"name:=expr"` variable definitions. New
   `graphcalc/calc.py::parse_definition(expr)` (an anchored
   `^\s*(ident)\s*:=\s*(.+?)\s*$` regex) returns `(name, rhs)`, or `None` for

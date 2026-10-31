@@ -1,5 +1,6 @@
 # Notes
 
+- M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
 - P2/S3 attempt 2 (2026-10-27): `test_static_security_escapes_allowed_extension`

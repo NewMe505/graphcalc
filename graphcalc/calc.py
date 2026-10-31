@@ -115,8 +115,9 @@ def evaluate(expr: str, mode: str = "rad") -> dict:
 
     Keys: expr, exact, decimal, complex, domain_error. `exact` is the
     simplified result's str(). `decimal` is a 12-significant-digit string
-    for a real numeric result, else None. `complex` is a formatted "a+bi"
-    string when the result has a nonzero imaginary part, else None.
+    for a real numeric result, else None. `complex` is a rectangular form
+    {"real": str, "imag": str}, each a 12-significant-digit string, when
+    the result has a nonzero imaginary part, else None.
     `domain_error` is always None in this step -- it is set by later
     features for inputs that have no value (1/0, 0/0).
 
@@ -152,7 +153,10 @@ def evaluate(expr: str, mode: str = "rad") -> dict:
         if im_part == 0:
             decimal = format_decimal(result)
         else:
-            complex_value = f"{format_decimal(re_part)}+{format_decimal(im_part)}i"
+            complex_value = {
+                "real": format_decimal(re_part),
+                "imag": format_decimal(im_part),
+            }
 
     return {
         "expr": expr,

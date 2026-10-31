@@ -24,11 +24,14 @@ from sympy import (
     exp,
     factorial,
     log,
+    nan,
+    oo,
     pi,
     simplify,
     sin,
     sqrt,
     tan,
+    zoo,
 )
 from sympy.parsing.sympy_parser import (
     convert_xor,
@@ -110,6 +113,15 @@ class CalcError(Exception):
     """A user-facing calculator error: bad syntax or an invalid parameter."""
 
 
+# The two domain_error messages: zoo/oo/-oo (a division by zero) vs. nan (an
+# indeterminate form such as 0/0). Kept as module constants so other
+# features (and tests) can check against the exact wording.
+DOMAIN_ERROR_DIVISION_BY_ZERO = "division by zero"
+DOMAIN_ERROR_UNDEFINED = "undefined"
+
+_INFINITE_RESULTS = (zoo, oo, -oo)
+
+
 def evaluate(expr: str, mode: str = "rad") -> dict:
     """Parse and evaluate `expr`, returning the calc/evaluate response dict.
 
@@ -118,8 +130,12 @@ def evaluate(expr: str, mode: str = "rad") -> dict:
     for a real numeric result, else None. `complex` is a rectangular form
     {"real": str, "imag": str}, each a 12-significant-digit string, when
     the result has a nonzero imaginary part, else None.
-    `domain_error` is always None in this step -- it is set by later
-    features for inputs that have no value (1/0, 0/0).
+
+    `domain_error` is None on success. When the math has no value -- a
+    division by zero (1/0 -> zoo, or oo/-oo) or an indeterminate form
+    (0/0 -> nan) -- `exact`, `decimal` and `complex` are all None instead,
+    and `domain_error` holds a message: "division by zero" for zoo/oo/-oo,
+    "undefined" for nan.
 
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.
@@ -148,7 +164,16 @@ def evaluate(expr: str, mode: str = "rad") -> dict:
     complex_value = None
     domain_error = None
 
-    if not result.free_symbols and getattr(result, "is_number", False):
+    # Check for a domain error before any formatting: a result with no
+    # value (a division by zero, or an indeterminate form) reports
+    # exact/decimal/complex as None instead of trying to format zoo/nan.
+    if result in _INFINITE_RESULTS:
+        domain_error = DOMAIN_ERROR_DIVISION_BY_ZERO
+        exact = None
+    elif result is nan:
+        domain_error = DOMAIN_ERROR_UNDEFINED
+        exact = None
+    elif not result.free_symbols and getattr(result, "is_number", False):
         re_part, im_part = N(result, 17).as_real_imag()
         if im_part == 0:
             decimal = format_decimal(result)

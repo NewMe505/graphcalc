@@ -36,11 +36,35 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   `mode` answers 400 with `{"error": <message>}`; a body with no `expr`
   answers 400 with `{"error": "missing parameter: expr"}`. Never a 500.
 
+  A non-real result (e.g. `"sqrt(-4)"`) keeps `exact` as sympy's `str()`
+  (`"2*I"`) and also fills `complex` with a rectangular
+  `{"real": str, "imag": str}`, each a 12-significant-digit string
+  (`"ln(-1)"` gives `complex {"real": "0", "imag": "3.14159265359"}`).
+  A result with no value answers 200 with `exact`, `decimal` and `complex`
+  all `null` and `domain_error` set instead: `"division by zero"` for a
+  division by zero (`"1/0"`), or a non-null message for an indeterminate
+  form (`"0/0"`). An undefined name parses as a free symbol, as on the
+  TI-Nspire CAS (`"2x"` gives exact `"2*x"`); while the result still has a
+  free symbol, `decimal` (and `complex`) stay `null` instead of being
+  formatted. `mode` accepts only `"rad"` or `"deg"`; any other value is a
+  400, same as a missing or non-string `expr` or a syntax error -- never
+  a 500.
+
   ```
   curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
     -H "Content-Type: application/json" \
     -d '{"expr": "1/3+1/6"}'
   # {"expr": "1/3+1/6", "exact": "1/2", "decimal": "0.5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "sqrt(-4)"}'
+  # {"expr": "sqrt(-4)", "exact": "2*I", "decimal": null, "complex": {"real": "0", "imag": "2"}, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "1/0"}'
+  # {"expr": "1/0", "exact": null, "decimal": null, "complex": null, "domain_error": "division by zero"}
   ```
 
 ## Develop

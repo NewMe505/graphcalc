@@ -22,6 +22,26 @@
   `graphcalc/calc.py` (the parser/evaluator, separate from HTTP) and
   `graphcalc/numfmt.py` (the shared 12-significant-digit decimal formatter,
   reused by later features).
+- `POST /api/calc/evaluate` (P5): a non-real result now answers `exact` as
+  sympy's own `str()` (e.g. `"sqrt(-4)"` -> `"2*I"`) plus a rectangular
+  `complex` form `{"real","imag"}`, each a 12-significant-digit string
+  (`"ln(-1)"` -> `complex {"real":"0","imag":"3.14159265359"}`); a real
+  result keeps `complex` `null` as before. A result with no value answers
+  200 with `exact`, `decimal` and `complex` all `null` and a `domain_error`
+  string instead: `"division by zero"` for a division by zero (`"1/0"` ->
+  `zoo`, or `oo/-oo`), a non-null message for an indeterminate form (`"0/0"`
+  -> `nan`). An undefined name parses as a sympy `Symbol` via implicit
+  multiplication (`"2x"` -> exact `"2*x"`); when the result still has free
+  symbols, `decimal` (and `complex`) stay `null` instead of being formatted.
+  `mode` accepts only `"rad"` or `"deg"` (missing keeps the existing
+  default); any other value, including a non-string one, is a 400, same as
+  a missing or non-string `expr`. Syntax errors and any other unexpected
+  failure inside the handler stay a 400, never a 500. Added
+  `graphcalc/names.py`: `check_not_constant(name)` raises the same
+  client-error exception (`CalcError` -> 400) for a reserved constant or
+  function name (`pi`, `e`, `E`, `I`, `i`, `oo`, `nan`, and the whitelisted
+  trig/log/exp/sqrt/abs names); P7's `name:=expr` variable/function
+  definitions will call it too.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

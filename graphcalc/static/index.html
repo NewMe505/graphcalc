@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>GraphCalc</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <nav class="tabs">
+    <button type="button" class="tab-button active" data-tab="tab-calculator">Calculator</button>
+    <button type="button" class="tab-button" data-tab="tab-graphs">Graphs</button>
+    <button type="button" class="tab-button" data-tab="tab-lists">Lists &amp; Statistics</button>
+    <button type="button" class="tab-button" data-tab="tab-cas">CAS</button>
+  </nav>
+
+  <section id="tab-calculator" class="tab-panel active">
+    <h2>Calculator</h2>
+  </section>
+
+  <section id="tab-graphs" class="tab-panel">
+    <h2>Graphs</h2>
+    <canvas id="graph-canvas" width="600" height="400"></canvas>
+  </section>
+
+  <section id="tab-lists" class="tab-panel">
+    <h2>Lists &amp; Statistics</h2>
+  </section>
+
+  <section id="tab-cas" class="tab-panel">
+    <h2>CAS</h2>
+  </section>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

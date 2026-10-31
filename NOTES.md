@@ -3,6 +3,49 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P7/S1 (2026-10-31): `"name:=expr"` variable definitions. New
+  `graphcalc/calc.py::parse_definition(expr)` (an anchored
+  `^\s*(ident)\s*:=\s*(.+?)\s*$` regex) returns `(name, rhs)`, or `None` for
+  anything else -- including `"f(x):=expr"`, whose `"("` right after the
+  name can never match this pattern, so function definitions are cleanly
+  left for a later step. `calc.evaluate` gained a `variables: dict | None`
+  parameter, merged into `local_dict` via plain `sympify()` (never
+  `_rad_names()`/`_deg_names()`, which remaps `log`/degrees and would
+  corrupt a stored value, same reasoning as `ans` in P6/S2's notes) -- a
+  bound name is never split by `split_symbols`, so `"2a"` resolves to
+  `"2*5"` once `a` is stored.
+  Plan drift, noted explicitly rather than left silent:
+  - The plan's file list named `graphcalc/server.py`; this repo's HTTP
+    handler is `graphcalc/cli.py` (NOTES.md already recorded this same
+    mismatch for P2/S3). All server-side wiring landed in `cli.py`.
+  - The plan asked to store variables "in the same persisted state object
+    as history." That is not literally what landed: history
+    (`graphcalc/history.py`'s `HistoryStore`) and the new
+    `graphcalc/state.py::CalcState` are two separate objects, each held on
+    the `HTTPServer` instance (`.history_store` and `.state`). Unifying
+    them means editing `history.py`, which is outside this step's file
+    list, and PRODUCT.md already charters that unification, plus the
+    `--state` CLI flag, atomic-write detail and `.gitignore` entry, as a
+    separate feature (P9). `CalcState` only does what P7 itself needs:
+    an in-memory `{"variables", "functions"}` dict, optionally mirrored to
+    an explicitly-given JSON file path (load on construction, atomic
+    `os.replace` write-through on every change). With no path -- the
+    default for `build_server(port)` and what `--in-memory` relies on --
+    it never touches disk, so the acceptance/hidden-suite run creates no
+    stray file. There is no `--state` flag yet; a test that wants the
+    "survives a restart" behavior builds two `CalcState`/server instances
+    on the same explicit path by hand (`test_variable_survives_server_
+    restart_on_same_state_file` in `tests/test_calc_definitions.py`).
+  `cli.py::_handle_calc_evaluate` now checks `calc.parse_definition` first:
+  `names.check_not_constant(name)` (already added by P5/S3 for exactly
+  this) rejects a reserved name before anything is evaluated (`"pi:=3"` ->
+  400 `"cannot redefine constant pi"`, and critically, nothing gets stored
+  -- storing it first would shadow the real `pi` in every later
+  expression's `local_dict` merge); only a right-hand side with no
+  `domain_error` is stored, so `"a:=1/0"` answers 200 with the domain error
+  and leaves `a` undefined. A definition is deliberately not appended to
+  the history store, so it cannot be recalled via `ans`; PRODUCT.md's `ans`
+  examples are all plain evaluations.
 - P6/S3 (2026-10-31): `DELETE /api/calc/history` in `graphcalc/cli.py`.
   `_handle_calc_history_delete` calls `_history_store(handler).clear()`
   (already implemented by S1's `InMemoryHistoryStore.clear()`) then answers

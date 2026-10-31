@@ -1,11 +1,13 @@
 """HTTP-free calculator core: parse an expression, evaluate it with sympy.
 
-evaluate() is the only thing graphcalc/cli.py calls; it never touches the
-network. Parsing is deliberately locked down: global_dict and local_dict
-only contain the constructors parse_expr's transformations emit and a
-small whitelist of calculator names, so an expression string can never
-reach a real Python builtin.
+evaluate() and parse_definition() are the only things graphcalc/cli.py
+calls; neither touches the network. Parsing is deliberately locked down:
+global_dict and local_dict only contain the constructors parse_expr's
+transformations emit and a small whitelist of calculator names, so an
+expression string can never reach a real Python builtin.
 """
+
+import re
 
 from sympy import (
     Abs,
@@ -111,6 +113,28 @@ def _deg_names():
     return names
 
 
+# A bare "name:=expr" assignment (plan step P7/S1). The identifier must be
+# the whole left-hand side -- "f(x):=..." (a function definition) has a "("
+# right after the name, which this pattern's \s*:=\s* cannot match, so it
+# is deliberately left for a later plan step to handle.
+_DEFINITION_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*:=\s*(.+?)\s*$")
+
+
+def parse_definition(expr: str) -> tuple[str, str] | None:
+    """Return (name, rhs) if `expr` is a plain "name:=expr" assignment.
+
+    Returns None for anything else -- including "f(x):=expr", normal
+    expressions, and non-string input -- so callers can try this first and
+    fall back to evaluate() unchanged when it returns None.
+    """
+    if not isinstance(expr, str):
+        return None
+    match = _DEFINITION_RE.match(expr)
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
 class CalcError(Exception):
     """A user-facing calculator error: bad syntax or an invalid parameter."""
 
@@ -131,7 +155,12 @@ _INFINITE_RESULTS = (zoo, oo, -oo)
 _UNDEFINED_ANS = Dummy("ans")
 
 
-def evaluate(expr: str, mode: str = "rad", last_entry: dict | None = None) -> dict:
+def evaluate(
+    expr: str,
+    mode: str = "rad",
+    last_entry: dict | None = None,
+    variables: dict | None = None,
+) -> dict:
     """Parse and evaluate `expr`, returning the calc/evaluate response dict.
 
     Keys: expr, exact, decimal, complex, domain_error. `exact` is the
@@ -156,6 +185,13 @@ def evaluate(expr: str, mode: str = "rad", last_entry: dict | None = None) -> di
     expression's free symbols, evaluate raises CalcError("ans is undefined")
     instead of treating "ans" as a free variable.
 
+    `variables` is a name -> exact-value-string mapping (graphcalc.state's
+    CalcState.variables(), typically) bound into local_dict the same way --
+    each value is reparsed with plain sympify(), never through
+    _rad_names()/_deg_names() (that whitelist remaps "log" to log10 and
+    would double-convert degrees). A bound name is never split by
+    split_symbols, so "2a" resolves to "2*5" when a's exact value is "5".
+
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.
     """
@@ -165,6 +201,9 @@ def evaluate(expr: str, mode: str = "rad", last_entry: dict | None = None) -> di
         raise CalcError("missing parameter: expr")
 
     local_dict = _deg_names() if mode == "deg" else _rad_names()
+    if variables:
+        for name, value in variables.items():
+            local_dict[name] = sympify(value)
     try:
         local_dict["ans"] = (
             sympify(last_entry["exact"]) if last_entry is not None else _UNDEFINED_ANS

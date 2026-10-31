@@ -55,6 +55,25 @@
   (`graphcalc/history.py`); the only implementation today is in-memory and
   does not survive a restart.
 
+- Variable definitions (P7/S1): `"name:=expr"` (e.g. `"a:=5"`) evaluates
+  `expr`, stores its exact value under `name`, and answers 200 with the
+  usual evaluate shape, `"expr"` set to the original `"name:=expr"` text.
+  A later expression (e.g. `"2a+1"`) substitutes the stored value the same
+  way `pi` or `ans` already do (`graphcalc/calc.py`'s `evaluate` gained a
+  `variables` parameter). Redefining a reserved constant (e.g. `"pi:=3"`)
+  answers 400 `{"error": "cannot redefine constant pi"}` via
+  `graphcalc/names.py`'s existing `check_not_constant`, and stores nothing.
+  A right-hand side with a `domain_error` (e.g. `"a:=1/0"`) answers 200
+  with the domain error and also stores nothing. New `graphcalc/state.py`:
+  `CalcState` holds `{"variables", "functions"}` (`functions` defaults to
+  `{}` so an older state file without it still loads); with no path it is
+  in-memory only (what the default server and `--in-memory` use, so no
+  file is ever created), and with a path it loads that file's JSON and
+  writes through atomically after every change, so a new `CalcState` on
+  the same path picks up where the last one left off. `"f(x):=expr"`
+  function definitions, `GET /api/calc/vars`, and the `--state` CLI flag
+  (P9) are separate, later steps.
+
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
   byte, a backslash or an absolute segment in the decoded name outright, and

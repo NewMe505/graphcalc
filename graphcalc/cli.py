@@ -6,7 +6,9 @@ math API lives under /api/calc/... -- see Handler.do_POST and
 _handle_calc_evaluate for POST /api/calc/evaluate, which defers the actual
 parsing and evaluation to graphcalc.calc. Every successful evaluation is
 appended to a graphcalc.history.HistoryStore held on the HTTPServer instance
-(see build_server and _history_store); GET /api/calc/history reads it back.
+(see build_server and _history_store); GET /api/calc/history reads it back,
+and DELETE /api/calc/history clears it (see Handler.do_DELETE and
+_handle_calc_history_delete).
 """
 
 import argparse
@@ -124,6 +126,17 @@ def _handle_calc_history_get(handler):
     _send_json(handler, 200, {"history": _history_store(handler).entries()})
 
 
+def _handle_calc_history_delete(handler):
+    """DELETE /api/calc/history -> clears the store, then 200 {"history": []}.
+
+    After this, "ans" in a later /api/calc/evaluate has no last entry to
+    recall: calc.evaluate raises CalcError("ans is undefined"), which
+    _handle_calc_evaluate turns into the usual 400, never a 500.
+    """
+    _history_store(handler).clear()
+    _send_json(handler, 200, {"history": []})
+
+
 def _handle_calc_evaluate(handler):
     """POST /api/calc/evaluate: {"expr","mode"} -> calc.evaluate's dict, 200 JSON.
 
@@ -180,8 +193,9 @@ class Handler(BaseHTTPRequestHandler):
     - /                      -> 200 text/html, the four-tab index page
     - /static/<name>         -> see _serve_static for the allowlist and the
                                  traversal/NUL/backslash checks
-    - POST /api/calc/evaluate -> see _handle_calc_evaluate
-    - GET /api/calc/history   -> see _handle_calc_history_get
+    - POST /api/calc/evaluate   -> see _handle_calc_evaluate
+    - GET /api/calc/history     -> see _handle_calc_history_get
+    - DELETE /api/calc/history  -> see _handle_calc_history_delete
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -203,6 +217,12 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == CALC_EVALUATE_PATH:
             _handle_calc_evaluate(self)
+            return
+        _send_json(self, 404, {"error": f"not found: {self.path}"})
+
+    def do_DELETE(self):
+        if self.path == CALC_HISTORY_PATH:
+            _handle_calc_history_delete(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

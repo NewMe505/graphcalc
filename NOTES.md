@@ -3,6 +3,22 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P6/S3 (2026-10-31): `DELETE /api/calc/history` in `graphcalc/cli.py`.
+  `_handle_calc_history_delete` calls `_history_store(handler).clear()`
+  (already implemented by S1's `InMemoryHistoryStore.clear()`) then answers
+  200 `{"history": []}`, same shape as a fresh store. Wired as
+  `Handler.do_DELETE`, matching only `CALC_HISTORY_PATH` exactly, 404 JSON
+  otherwise -- `BaseHTTPRequestHandler` has no default `do_DELETE`, so
+  without this method a DELETE request would 501, not 404 or 500; this is
+  the first route this product serves outside GET/POST. No new design
+  decision: S2 already made "ans" raise `CalcError("ans is undefined")`
+  whenever `_history_store(handler).last()` is `None`, which is exactly the
+  state DELETE restores, so clearing the store and re-evaluating "ans"
+  exercises that same existing path -- confirmed by
+  `test_history_delete_and_ans_undefined` (evaluate "2+3", DELETE -> 200
+  `{"history": []}`, GET -> `{"history": []}`, evaluate "ans" -> 400
+  `{"error": "ans is undefined"}`). Also folded the history/"ans" feature
+  (S1-S3) into `CHANGELOG.md`, which S1/S2 had left undocumented there.
 - P6/S2 (2026-10-31): "ans" substitution in `graphcalc/calc.py`'s `evaluate`.
   New `last_entry: dict | None` parameter; cli.py's `_handle_calc_evaluate`
   now passes `_history_store(handler).last()` into it -- this one-line

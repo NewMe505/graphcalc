@@ -43,6 +43,18 @@
   trig/log/exp/sqrt/abs names); P7's `name:=expr` variable/function
   definitions will call it too.
 
+- Evaluation history (P6): every successful `POST /api/calc/evaluate` (no
+  parse error, no `domain_error`) is appended to an in-memory history as
+  `{"expr","exact","decimal"}`, oldest first. `GET /api/calc/history`
+  answers 200 `{"history": [...]}`. `ans` in an expression (e.g. `"ans*2"`)
+  substitutes the exact value of the last entry; with no history yet, or
+  right after `DELETE /api/calc/history`, evaluating `"ans"` answers 400
+  `{"error": "ans is undefined"}` instead of treating it as a free
+  variable. `DELETE /api/calc/history` clears the history and answers 200
+  `{"history": []}`. History lives behind a `HistoryStore` interface
+  (`graphcalc/history.py`); the only implementation today is in-memory and
+  does not survive a restart.
+
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
   byte, a backslash or an absolute segment in the decoded name outright, and

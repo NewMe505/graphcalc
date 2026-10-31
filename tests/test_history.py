@@ -1,4 +1,5 @@
-"""Tests for the history store, GET /api/calc/history (S1), and "ans" (S2).
+"""Tests for the history store: GET /api/calc/history (S1), "ans" (S2), and
+DELETE /api/calc/history (S3).
 
 Only a successful evaluation (no CalcError, no domain_error) is appended to
 history, as {"expr": <input>, "exact": ..., "decimal": ...}; a 400 (parse
@@ -8,7 +9,9 @@ HTTPServer instance -- never shared across tests.
 
 "ans" recalls the last entry's exact result (calc.evaluate's `last_entry`
 parameter, fed by cli.py from the same history store); with no history yet,
-evaluating "ans" is a 400 {"error": "ans is undefined"}.
+evaluating "ans" is a 400 {"error": "ans is undefined"}. DELETE
+/api/calc/history clears the store (200 {"history": []}), so "ans" goes
+back to undefined even if an entry existed before the delete.
 """
 
 import json
@@ -40,6 +43,15 @@ def _post(base, path, payload):
 def _get(base, path):
     try:
         with urllib.request.urlopen(base + path) as res:
+            return res.status, json.loads(res.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        return err.code, json.loads(err.read().decode("utf-8"))
+
+
+def _delete(base, path):
+    req = urllib.request.Request(base + path, method="DELETE")
+    try:
+        with urllib.request.urlopen(req) as res:
             return res.status, json.loads(res.read().decode("utf-8"))
     except urllib.error.HTTPError as err:
         return err.code, json.loads(err.read().decode("utf-8"))
@@ -171,6 +183,28 @@ def test_ans_undefined_on_empty_history(base):
     status, body = _get(base, "/api/calc/history")
     assert status == 200
     assert body == {"history": []}
+
+
+# ---- DELETE /api/calc/history clears it, and "ans" goes undefined again
+#      (plan step S3) ----
+
+
+def test_history_delete_and_ans_undefined(base):
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "2+3"})
+    assert status == 200
+    assert body["exact"] == "5"
+
+    status, body = _delete(base, "/api/calc/history")
+    assert status == 200
+    assert body == {"history": []}
+
+    status, body = _get(base, "/api/calc/history")
+    assert status == 200
+    assert body == {"history": []}
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "ans"})
+    assert status == 400
+    assert body == {"error": "ans is undefined"}
 
 
 # ---- unit tests: InMemoryHistoryStore directly, no HTTP ----

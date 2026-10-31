@@ -17,6 +17,7 @@ from sympy import (
     Function,
     I,
     Integer,
+    Lambda,
     N,
     Rational,
     Symbol,
@@ -135,6 +136,67 @@ def parse_definition(expr: str) -> tuple[str, str] | None:
     return match.group(1), match.group(2)
 
 
+# A "f(x):=expr" or "f(x,y):=expr" function definition (plan step P7/S2):
+# an identifier, a parenthesised comma-separated list of one or more plain
+# identifier params, then ":=". "f():=1" (no params) and "f(1):=2" (a
+# non-identifier "param") deliberately do not match -- they fall through to
+# evaluate(), which reports its own CalcError for the stray ":=".
+_FUNCTION_DEFINITION_RE = re.compile(
+    r"^\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)\s*:=\s*(.+?)\s*$"
+)
+
+
+def parse_function_definition(expr: str) -> tuple[str, list[str], str] | None:
+    """Return (name, params, rhs) if `expr` is a "f(x[, y...]):=expr" definition.
+
+    Returns None for anything else -- including a bare "name:=expr" variable
+    definition (parse_definition matches that instead), a function call such
+    as "f(3)" (no ":=" at all), and malformed syntax -- so callers can try
+    this after parse_definition and fall back to evaluate() unchanged when
+    both return None.
+    """
+    if not isinstance(expr, str):
+        return None
+    match = _FUNCTION_DEFINITION_RE.match(expr)
+    if match is None:
+        return None
+    name = match.group(1)
+    params = [p.strip() for p in match.group(2).split(",")]
+    rhs = match.group(3)
+    return name, params, rhs
+
+
+def to_caret(exact: str) -> str:
+    """Render a sympy str() result with "^" for power instead of "**".
+
+    sympy's str() always prints exponentiation as "**" (plain Python); this
+    calculator's own input syntax, a function definition's returned body
+    (plan step P7/S2), and later P19's CAS results instead use "^". A plain
+    string replace is safe because sympy's str() never emits a literal "**"
+    for anything else. The *stored* body string (graphcalc.state.CalcState)
+    stays in "**" form -- this conversion is applied only when building an
+    API response, so the stored string stays directly re-sympify()-able.
+    """
+    return exact.replace("**", "^")
+
+
+def _function_locals(functions: dict) -> dict:
+    """Build {name: Lambda(params_as_Symbols, body)} for every stored function.
+
+    `functions` is graphcalc.state.CalcState.functions()'s mapping: name ->
+    {"params": [str, ...], "body": <plain sympy str, "**" notation>}. Each
+    Lambda is rebuilt fresh from the stored strings every call -- including
+    right after a disk reload, since CalcState only ever stores plain
+    strings, never a Lambda object itself.
+    """
+    built = {}
+    for name, spec in functions.items():
+        params = tuple(Symbol(p) for p in spec["params"])
+        body = sympify(spec["body"])
+        built[name] = Lambda(params, body)
+    return built
+
+
 class CalcError(Exception):
     """A user-facing calculator error: bad syntax or an invalid parameter."""
 
@@ -160,6 +222,8 @@ def evaluate(
     mode: str = "rad",
     last_entry: dict | None = None,
     variables: dict | None = None,
+    functions: dict | None = None,
+    symbols: list[str] | None = None,
 ) -> dict:
     """Parse and evaluate `expr`, returning the calc/evaluate response dict.
 
@@ -192,6 +256,20 @@ def evaluate(
     would double-convert degrees). A bound name is never split by
     split_symbols, so "2a" resolves to "2*5" when a's exact value is "5".
 
+    `functions` is a name -> {"params": [...], "body": str} mapping
+    (graphcalc.state's CalcState.functions(), typically; plan step P7/S2).
+    _function_locals() rebuilds each one as a fresh sympy Lambda(params,
+    body) and binds it the same way, so "f(3)" calls the Lambda directly --
+    the same mechanism "sin(30)" already uses for a whitelisted name. Calling
+    a bound function with the wrong number of arguments raises sympy's
+    BadArgumentsError, caught below like any other parse/eval failure and
+    turned into a CalcError, never left to propagate as a 500.
+
+    `symbols` is a list of names (a function definition's own params) bound
+    to plain sympy Symbol(name) instead, applied after `variables` so a
+    param always wins over a stored variable of the same name when a
+    function's own body is being parsed to define it.
+
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.
     """
@@ -205,6 +283,11 @@ def evaluate(
         for name, value in variables.items():
             local_dict[name] = sympify(value)
     try:
+        if functions:
+            local_dict.update(_function_locals(functions))
+        if symbols:
+            for name in symbols:
+                local_dict[name] = Symbol(name)
         local_dict["ans"] = (
             sympify(last_entry["exact"]) if last_entry is not None else _UNDEFINED_ANS
         )

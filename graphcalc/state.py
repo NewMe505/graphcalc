@@ -48,6 +48,18 @@ class CalcState:
         self._data["variables"][name] = exact
         self._save()
 
+    def set_function(self, name: str, params: list, body: str) -> None:
+        """Store {"params": params, "body": body} under `name` (plan step P7/S2).
+
+        `body` is the plain sympy str() of the definition's right-hand side
+        (e.g. "x**2 + 1") -- the same "**" notation graphcalc.calc.evaluate
+        always returns and graphcalc.calc._function_locals re-sympify()s on
+        every call, never the "^" caret form an API response shows. Saves to
+        disk the same way set_variable does.
+        """
+        self._data["functions"][name] = {"params": list(params), "body": body}
+        self._save()
+
     def _save(self) -> None:
         if self._path is None:
             return

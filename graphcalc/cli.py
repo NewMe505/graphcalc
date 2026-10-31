@@ -175,16 +175,31 @@ def _handle_calc_evaluate(handler):
     domain_error (division by zero, undefined) adds nothing.
 
     Before any of that, calc.parse_definition checks whether expr is a bare
-    "name:=expr" assignment (plan step P7/S1; "f(x):=expr" function
-    definitions are a separate, later step). When it is: names.check_not_
+    "name:=expr" assignment (plan step P7/S1). When it is: names.check_not_
     constant(name) first rejects a reserved name (-> 400 "cannot redefine
     constant <name>"), then the right-hand side is evaluated the same way
-    as any other expr (so it also sees previously stored variables), and --
-    only when that evaluation has no domain_error -- the result's exact
-    value is stored under name in the HTTPServer's CalcState. The response
-    is calc.evaluate's own dict with "expr" replaced by the original
-    "name:=expr" text. A definition is not added to the history store; "ans"
-    only ever recalls a plain evaluation's result.
+    as any other expr (so it also sees previously stored variables and
+    functions), and -- only when that evaluation has no domain_error -- the
+    result's exact value is stored under name in the HTTPServer's CalcState.
+    The response is calc.evaluate's own dict with "expr" replaced by the
+    original "name:=expr" text. A definition is not added to the history
+    store; "ans" only ever recalls a plain evaluation's result.
+
+    calc.parse_function_definition checks for "f(x):=expr" (or "f(x,y):=
+    expr") the same way (plan step P7/S2): names.check_not_constant(name)
+    rejects a reserved function name, then the body is evaluated with the
+    params bound as plain Symbols (so a param always wins over a same-named
+    stored variable) and with every previously stored function also in
+    scope. On success, {"params": params, "body": <plain "**" str>} is
+    stored under name in CalcState, and the response's "exact" is the body
+    rendered in caret form via calc.to_caret (e.g. "x^2 + 1") -- the one
+    place that conversion happens; the stored body itself stays in plain
+    "**" form so it stays directly re-sympify()-able. A later plain
+    evaluate() call such as "f(3)" sees every stored function through
+    `functions=_state(handler).functions()` below, which rebuilds it as a
+    sympy Lambda; calling it with the wrong number of arguments is a 400,
+    never a 500 (calc.evaluate turns sympy's BadArgumentsError into a
+    CalcError).
 
     Everything above is wrapped in a catch-all: any exception this function
     did not anticipate (e.g. something calc.evaluate's own try/except does
@@ -218,6 +233,7 @@ def _handle_calc_evaluate(handler):
                     mode,
                     last_entry=_history_store(handler).last(),
                     variables=_state(handler).variables(),
+                    functions=_state(handler).functions(),
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
@@ -229,12 +245,38 @@ def _handle_calc_evaluate(handler):
             _send_json(handler, 200, response)
             return
 
+        function_definition = calc.parse_function_definition(expr)
+        if function_definition is not None:
+            name, params, rhs = function_definition
+            try:
+                names.check_not_constant(name)
+                result = calc.evaluate(
+                    rhs,
+                    mode,
+                    last_entry=_history_store(handler).last(),
+                    variables=_state(handler).variables(),
+                    functions=_state(handler).functions(),
+                    symbols=params,
+                )
+            except calc.CalcError as exc:
+                _send_json(handler, 400, {"error": str(exc)})
+                return
+            if result["exact"] is not None:
+                _state(handler).set_function(name, params, result["exact"])
+            response = dict(result)
+            response["expr"] = expr
+            if result["exact"] is not None:
+                response["exact"] = calc.to_caret(result["exact"])
+            _send_json(handler, 200, response)
+            return
+
         try:
             result = calc.evaluate(
                 expr,
                 mode,
                 last_entry=_history_store(handler).last(),
                 variables=_state(handler).variables(),
+                functions=_state(handler).functions(),
             )
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})

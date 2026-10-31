@@ -67,6 +67,34 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   # {"expr": "1/0", "exact": null, "decimal": null, "complex": null, "domain_error": "division by zero"}
   ```
 
+- `GET /api/calc/history` -- 200 `{"history": [...]}`, oldest entry first.
+  Every successful `POST /api/calc/evaluate` (no parse error, no
+  `domain_error`) appends `{"expr", "exact", "decimal"}` to the history; a
+  400 or a `domain_error` result adds nothing.
+- `DELETE /api/calc/history` -- clears the history, answers 200
+  `{"history": []}`.
+- `ans` in an expression (e.g. `"ans*2"`) substitutes the exact value of
+  the last history entry. With an empty history -- at startup, or right
+  after `DELETE /api/calc/history` -- evaluating `"ans"` answers 400
+  `{"error": "ans is undefined"}` instead of treating it as a free
+  variable.
+
+  ```
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "2+3"}'
+  # {"expr": "2+3", "exact": "5", "decimal": "5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "ans*2"}'
+  # {"expr": "ans*2", "exact": "10", "decimal": "10", "complex": null, "domain_error": null}
+
+  curl -s http://127.0.0.1:8000/api/calc/history
+  # {"history": [{"expr": "2+3", "exact": "5", "decimal": "5"}, {"expr": "ans*2", "exact": "10", "decimal": "10"}]}
+
+  curl -s -X DELETE http://127.0.0.1:8000/api/calc/history
+  # {"history": []}
+  ```
+
 ## Develop
 
 ```

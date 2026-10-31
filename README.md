@@ -95,6 +95,49 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   # {"history": []}
   ```
 
+- `"name:=expr"` (e.g. `"a:=5"`) defines a variable: evaluates `expr`,
+  stores its exact value under `name`, and answers 200 with the usual
+  evaluate shape, `"expr"` set back to the original `"name:=expr"` text.
+  `"f(x):=expr"` (or `"f(x,y):=expr"`, one or more comma-separated params)
+  defines a function the same way, with `"exact"` set to the body in caret
+  form (e.g. `"x^2 + 1"`). Either kind is usable in a later expression --
+  `"2a+1"` substitutes `a`'s stored value, `"f(3)"` calls the stored
+  function -- the same way `pi` or `ans` already are; calling a function
+  with the wrong number of arguments is a 400, never a 500. Redefining a
+  reserved constant or function name (`pi`, `e`, `E`, `I`, `i`, `oo`, `nan`,
+  or a built-in function name) answers 400
+  `{"error": "cannot redefine constant <name>"}` and stores nothing; a
+  right-hand side that answers a `domain_error` (e.g. `"a:=1/0"`) answers
+  200 with that error and also stores nothing.
+- `GET /api/calc/vars` -- 200 `{"variables": {name: exact}, "functions":
+  {name: {"params": [...], "body": exact}}}` for everything defined so far,
+  values and bodies both in caret form.
+
+  ```
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "a:=5"}'
+  # {"expr": "a:=5", "exact": "5", "decimal": "5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "2a+1"}'
+  # {"expr": "2a+1", "exact": "11", "decimal": "11", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "f(x):=x^2+1"}'
+  # {"expr": "f(x):=x^2+1", "exact": "x^2 + 1", "decimal": null, "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "f(3)"}'
+  # {"expr": "f(3)", "exact": "10", "decimal": "10", "complex": null, "domain_error": null}
+
+  curl -s http://127.0.0.1:8000/api/calc/vars
+  # {"variables": {"a": "5"}, "functions": {"f": {"params": ["x"], "body": "x^2 + 1"}}}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "pi:=3"}'
+  # {"error": "cannot redefine constant pi"}
+  ```
+
 ## Develop
 
 ```

@@ -9,6 +9,7 @@ reach a real Python builtin.
 
 from sympy import (
     Abs,
+    Dummy,
     E,
     Float,
     Function,
@@ -30,6 +31,7 @@ from sympy import (
     simplify,
     sin,
     sqrt,
+    sympify,
     tan,
     zoo,
 )
@@ -121,8 +123,15 @@ DOMAIN_ERROR_UNDEFINED = "undefined"
 
 _INFINITE_RESULTS = (zoo, oo, -oo)
 
+# Bound to "ans" in local_dict whenever there is no history yet, so parse_expr's
+# implicit_multiplication_application (which includes split_symbols) never gets
+# the chance to see "ans" as an unbound name and split it into a*n*s. A Dummy is
+# never equal to anything a user could type, so finding it in the parsed
+# expression's free symbols afterwards unambiguously means the input used "ans".
+_UNDEFINED_ANS = Dummy("ans")
 
-def evaluate(expr: str, mode: str = "rad") -> dict:
+
+def evaluate(expr: str, mode: str = "rad", last_entry: dict | None = None) -> dict:
     """Parse and evaluate `expr`, returning the calc/evaluate response dict.
 
     Keys: expr, exact, decimal, complex, domain_error. `exact` is the
@@ -137,6 +146,16 @@ def evaluate(expr: str, mode: str = "rad") -> dict:
     and `domain_error` holds a message: "division by zero" for zoo/oo/-oo,
     "undefined" for nan.
 
+    `last_entry` is the history store's most recent successful entry (its
+    dict with an "exact" key), or None when the history is empty. The token
+    "ans" is bound to sympify(last_entry["exact"]) -- via local_dict, so it
+    is only ever matched as a whole identifier, never as a substring of
+    another name such as "answer". With no history, "ans" is instead bound
+    to a private sentinel so it still parses as one name rather than being
+    split into "a*n*s"; if that sentinel survives into the parsed
+    expression's free symbols, evaluate raises CalcError("ans is undefined")
+    instead of treating "ans" as a free variable.
+
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.
     """
@@ -147,12 +166,17 @@ def evaluate(expr: str, mode: str = "rad") -> dict:
 
     local_dict = _deg_names() if mode == "deg" else _rad_names()
     try:
+        local_dict["ans"] = (
+            sympify(last_entry["exact"]) if last_entry is not None else _UNDEFINED_ANS
+        )
         parsed = parse_expr(
             expr,
             transformations=_TRANSFORMATIONS,
             global_dict=_GLOBAL_DICT,
             local_dict=local_dict,
         )
+        if _UNDEFINED_ANS in parsed.free_symbols:
+            raise CalcError("ans is undefined")
         result = simplify(parsed)
     except CalcError:
         raise

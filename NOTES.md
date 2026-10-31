@@ -3,6 +3,40 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P6/S2 (2026-10-31): "ans" substitution in `graphcalc/calc.py`'s `evaluate`.
+  New `last_entry: dict | None` parameter; cli.py's `_handle_calc_evaluate`
+  now passes `_history_store(handler).last()` into it -- this one-line
+  `cli.py` change was outside S2's declared file list (`calc.py`,
+  `tests/test_history.py`) but is required for the feature to reach the
+  HTTP path at all, so it's noted here as plan drift rather than silent.
+  Pitfall that cost a design pass: `_TRANSFORMATIONS` includes
+  `implicit_multiplication_application`, which bundles `split_symbols` --
+  an *unbound* `ans` (not in local_dict) parses as `Symbol('ans')` only
+  until `split_symbols` sees no binding for it and splits it into
+  `a*n*s` (`calc.evaluate("ans*2")` returned `exact == "2*a*n*s"` before
+  this fix). So "ans" must always be bound in `local_dict`: to
+  `sympify(last_entry["exact"])` when history has an entry, or to a
+  private `Dummy("ans")` sentinel (`calc._UNDEFINED_ANS`) when it does
+  not. A bound name is never auto-symboled/split, so "ans" stays one
+  token either way, and binding via `local_dict` (not a string
+  substitution before parsing) is also what makes it match only as a
+  whole token -- "answer" tokenizes as one identifier regardless. When
+  the sentinel survives into the parsed expression's `free_symbols`,
+  `evaluate` raises `CalcError("ans is undefined")` (-> 400) from inside
+  the same `try` that already re-raises `CalcError` unchanged. `exact`
+  is reparsed with sympy's own `sympify`, not through `_rad_names()` /
+  `_deg_names()` -- that whitelist remaps `log` to log10 and would
+  double-convert degrees, so reusing it to read back a stored `exact`
+  would corrupt it. Known gap, not covered by any acceptance criterion
+  (verified by hand, `calc.evaluate("ans-ans")` with no `last_entry`):
+  `"ans-ans"` does *not* raise "ans is undefined". `parse_expr` combines
+  the two identical `_UNDEFINED_ANS` `Dummy` instances into `Integer(0)`
+  while building the expression tree, before `evaluate` ever checks
+  `free_symbols`, so the sentinel is already gone and the call quietly
+  returns `exact: "0"`. The `free_symbols` check only catches a sentinel
+  that survives to the parsed expression, not every syntactic use of
+  "ans" -- worth knowing if a later step wants "did the input mention
+  ans" rather than "does ans remain undefined in the result".
 - P5/S3 (2026-10-31): the free-symbol and mode/expr validation this step
   asked for ("2x" -> exact "2*x", decimal null; an invalid or non-string
   `mode`, and a missing or non-string `expr`, 400; a syntax error 400 never

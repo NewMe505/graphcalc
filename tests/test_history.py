@@ -1,10 +1,14 @@
-"""Tests for the history store and GET /api/calc/history (plan step S1).
+"""Tests for the history store, GET /api/calc/history (S1), and "ans" (S2).
 
 Only a successful evaluation (no CalcError, no domain_error) is appended to
 history, as {"expr": <input>, "exact": ..., "decimal": ...}; a 400 (parse
 error) adds nothing. Every test gets a fresh, empty history via the
 `server` fixture, which attaches a brand-new InMemoryHistoryStore to its own
 HTTPServer instance -- never shared across tests.
+
+"ans" recalls the last entry's exact result (calc.evaluate's `last_entry`
+parameter, fed by cli.py from the same history store); with no history yet,
+evaluating "ans" is a 400 {"error": "ans is undefined"}.
 """
 
 import json
@@ -127,6 +131,43 @@ def test_history_records_nothing_on_domain_error(base):
 
 
 def test_history_fixture_gives_a_fresh_store_each_test(base):
+    status, body = _get(base, "/api/calc/history")
+    assert status == 200
+    assert body == {"history": []}
+
+
+# ---- "ans" recalls the last successful result (plan step S2) ----
+
+
+def test_ans_recalls_last(base):
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "2+3"})
+    assert status == 200
+    assert body["exact"] == "5"
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "ans*2"})
+    assert status == 200
+    assert body["exact"] == "10"
+
+    # The original expression text is stored in history, not "10" or "5*2".
+    status, body = _get(base, "/api/calc/history")
+    assert status == 200
+    assert body["history"][-1] == {"expr": "ans*2", "exact": "10", "decimal": "10"}
+
+    # A second check: "ans" now refers to the just-recorded 10.
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "ans+1"})
+    assert status == 200
+    assert body["exact"] == "11"
+
+
+def test_ans_undefined_on_empty_history(base):
+    status, body = _get(base, "/api/calc/history")
+    assert status == 200
+    assert body == {"history": []}
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "ans"})
+    assert status == 400
+    assert body == {"error": "ans is undefined"}
+
     status, body = _get(base, "/api/calc/history")
     assert status == 200
     assert body == {"history": []}

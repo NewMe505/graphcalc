@@ -159,7 +159,7 @@ def _handle_calc_evaluate(handler):
             return
         mode = payload.get("mode", "rad")
         try:
-            result = calc.evaluate(expr, mode)
+            result = calc.evaluate(expr, mode, last_entry=_history_store(handler).last())
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})
             return

@@ -138,6 +138,16 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   # {"error": "cannot redefine constant pi"}
   ```
 
+The Calculator tab (`tab-calculator`) is wired to that API, not just a
+static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
+`/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and
+`#calc-vars` refresh from `GET /api/calc/history` and `GET /api/calc/vars`
+after every successful submit, and `#calc-error` shows the JSON error's
+message on a 400 or a `domain_error` (e.g. `"1/0"` shows `"division by
+zero"`). All of it lives in `graphcalc/static/app.js`, using plain `fetch()`
+on relative paths -- no build step, no external resources -- and the page
+still only draws what those three endpoints return.
+
 ## Develop
 
 ```

@@ -3,6 +3,26 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P8 (2026-10-31): Calculator tab UI, in `graphcalc/static/index.html` and
+  `graphcalc/static/app.js` only, per the plan's file list. Added the six
+  ids PRODUCT.md pins inside `tab-calculator`: `calc-input`, `calc-mode`
+  (a `rad`/`deg` `<select>`), `calc-submit`, `calc-history`, `calc-vars`,
+  `calc-error`. `app.js` wires them with plain `fetch()` on relative paths,
+  no external resources: submitting (click `calc-submit`, or Enter in
+  `calc-input`) POSTs `{"expr", "mode"}` to `/api/calc/evaluate`; a 400 or a
+  `domain_error` puts the message in `calc-error` and stops there; a clean
+  result instead re-fetches `GET /api/calc/history` and `GET /api/calc/vars`
+  and rebuilds `calc-history`/`calc-vars` from scratch each time, so the UI
+  can never drift from server state by patching incrementally. Both
+  acceptance criteria are static-content checks, not behavioral ones --
+  there is no in-process JS engine in this test suite -- so
+  `tests/test_calc_ui.py` starts a real `graphcalc.cli.Handler` server and
+  checks `GET /`'s parsed element ids and `GET /static/app.js`'s literal
+  path strings; the fetch round-trips themselves are left to the
+  acceptance suite / a real browser, noted in the test file's own
+  docstring. No design decision and no plan drift: P5-P7 had already shipped
+  every endpoint this tab calls, so no `graphcalc/cli.py` or route change
+  was needed.
 - P7/S3 (2026-10-31): `GET /api/calc/vars` in `graphcalc/cli.py`.
   `_handle_calc_vars_get` reads the HTTPServer's `graphcalc.state.CalcState`
   (same `_state(handler)` helper S1 added) and answers 200

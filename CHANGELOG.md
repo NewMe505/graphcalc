@@ -94,6 +94,20 @@
   evaluated or stored, so the constant still evaluates normally afterwards
   and state is left unchanged.
 
+- Calculator tab UI (P8): `GET /` now ships a working Calculator tab, not
+  just the static shell. `#calc-input` / `#calc-mode` / `#calc-submit` POST
+  `{"expr", "mode"}` to `/api/calc/evaluate` on click or on Enter in the
+  input; `#calc-history` and `#calc-vars` are rebuilt from a fresh
+  `GET /api/calc/history` and `GET /api/calc/vars` after every successful
+  submit (never patched incrementally, so they can't drift from server
+  state); `#calc-error` shows the JSON error's message on a 400 or a
+  `domain_error`, and is cleared on the next submit. All in
+  `graphcalc/static/app.js`, plain `fetch()` on relative paths, no external
+  resources; the page still draws only what those three endpoints return.
+  Added `tests/test_calc_ui.py`, pinning both acceptance criteria: `GET /`
+  contains the six `calc-*` ids, and `GET /static/app.js` mentions the three
+  API paths.
+
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
   byte, a backslash or an absolute segment in the decoded name outright, and

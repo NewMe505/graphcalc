@@ -15,6 +15,19 @@
 
   <section id="tab-calculator" class="tab-panel active">
     <h2>Calculator</h2>
+    <div>
+      <input type="text" id="calc-input" autocomplete="off" spellcheck="false" placeholder="e.g. 2+3">
+      <select id="calc-mode">
+        <option value="rad" selected>rad</option>
+        <option value="deg">deg</option>
+      </select>
+      <button type="button" id="calc-submit">=</button>
+    </div>
+    <p id="calc-error"></p>
+    <h3>History</h3>
+    <ul id="calc-history"></ul>
+    <h3>Variables &amp; functions</h3>
+    <dl id="calc-vars"></dl>
   </section>
 
   <section id="tab-graphs" class="tab-panel">

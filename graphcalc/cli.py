@@ -4,7 +4,18 @@ Serves JSON at /health and the plain HTML/CSS/JS page (and its /static/<name>
 assets) that the browser-facing tabs are built on; see Handler.do_GET. The
 math API lives under /api/calc/... -- see Handler.do_POST and
 _handle_calc_evaluate for POST /api/calc/evaluate, which defers the actual
-parsing and evaluation to graphcalc.calc.
+parsing and evaluation to graphcalc.calc. Every successful evaluation is
+appended to a graphcalc.history.HistoryStore held on the HTTPServer instance
+(see build_server and _history_store); GET /api/calc/history reads it back,
+and DELETE /api/calc/history clears it (see Handler.do_DELETE and
+_handle_calc_history_delete).
+
+A "name:=expr" input (graphcalc.calc.parse_definition) is detected before
+the normal evaluate path and stores the result in a graphcalc.state.CalcState
+held on the HTTPServer instance (see build_server and _state), separate from
+the history store -- history and state are not yet unified behind one
+object; that is a later feature (P9). GET /api/calc/vars reads that same
+CalcState back as JSON (see _handle_calc_vars_get).
 """
 
 import argparse
@@ -15,9 +26,13 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
 from graphcalc import __version__
+from graphcalc.history import InMemoryHistoryStore
+from graphcalc.state import CalcState
 
 HEALTH_PATH = "/health"
 CALC_EVALUATE_PATH = "/api/calc/evaluate"
+CALC_HISTORY_PATH = "/api/calc/history"
+CALC_VARS_PATH = "/api/calc/vars"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -100,6 +115,77 @@ def _read_json_body(handler):
     return json.loads(raw.decode("utf-8"))
 
 
+def _history_store(handler):
+    """Return the HTTPServer's history store, creating a default if missing.
+
+    build_server() always sets one up front; this fallback only matters for
+    a server built by calling HTTPServer(..., Handler) directly (as tests
+    that don't care about history do), so every request path still has a
+    store to read from or append to.
+    """
+    store = getattr(handler.server, "history_store", None)
+    if store is None:
+        store = InMemoryHistoryStore()
+        handler.server.history_store = store
+    return store
+
+
+def _state(handler):
+    """Return the HTTPServer's CalcState, creating a default if missing.
+
+    build_server() always sets one up front; this fallback only matters for
+    a server built by calling HTTPServer(..., Handler) directly (as tests
+    that don't care about variables do), so every evaluate request still has
+    a state object to read stored variables from or store a new one into.
+    The default CalcState() is in-memory only (no path), same as the
+    _history_store fallback.
+    """
+    state = getattr(handler.server, "state", None)
+    if state is None:
+        state = CalcState()
+        handler.server.state = state
+    return state
+
+
+def _handle_calc_history_get(handler):
+    """GET /api/calc/history -> 200 {"history": [...]}, oldest entry first."""
+    _send_json(handler, 200, {"history": _history_store(handler).entries()})
+
+
+def _handle_calc_history_delete(handler):
+    """DELETE /api/calc/history -> clears the store, then 200 {"history": []}.
+
+    After this, "ans" in a later /api/calc/evaluate has no last entry to
+    recall: calc.evaluate raises CalcError("ans is undefined"), which
+    _handle_calc_evaluate turns into the usual 400, never a 500.
+    """
+    _history_store(handler).clear()
+    _send_json(handler, 200, {"history": []})
+
+
+def _handle_calc_vars_get(handler):
+    """GET /api/calc/vars -> 200 {"variables": {...}, "functions": {...}}.
+
+    `_state(handler).variables()` and `.functions()` hold plain sympy str()
+    values/bodies ("**" notation, directly re-sympify()-able -- see
+    graphcalc.state.CalcState). Both are rendered through calc.to_caret the
+    same way a function definition's own evaluate response already is
+    (plan step P7/S2), so a value or body with a power reads with "^" here
+    too (e.g. a stored body "x**2 + 1" -> "x^2 + 1"); a plain value like
+    "5" is unchanged. This is read-only: it never evaluates or stores
+    anything, so it cannot itself trigger names.check_not_constant.
+    """
+    from graphcalc import calc
+
+    state = _state(handler)
+    variables = {name: calc.to_caret(value) for name, value in state.variables().items()}
+    functions = {
+        name: {"params": spec["params"], "body": calc.to_caret(spec["body"])}
+        for name, spec in state.functions().items()
+    }
+    _send_json(handler, 200, {"variables": variables, "functions": functions})
+
+
 def _handle_calc_evaluate(handler):
     """POST /api/calc/evaluate: {"expr","mode"} -> calc.evaluate's dict, 200 JSON.
 
@@ -108,12 +194,44 @@ def _handle_calc_evaluate(handler):
     a 500. The sympy-backed calc module is imported lazily so every other
     route keeps working even if sympy were ever unavailable.
 
+    Only a successful evaluation (no CalcError, and result["domain_error"]
+    is None) is appended to the history store as
+    {"expr": <original input>, "exact": ..., "decimal": ...}; a 400 or a
+    domain_error (division by zero, undefined) adds nothing.
+
+    Before any of that, calc.parse_definition checks whether expr is a bare
+    "name:=expr" assignment (plan step P7/S1). When it is: names.check_not_
+    constant(name) first rejects a reserved name (-> 400 "cannot redefine
+    constant <name>"), then the right-hand side is evaluated the same way
+    as any other expr (so it also sees previously stored variables and
+    functions), and -- only when that evaluation has no domain_error -- the
+    result's exact value is stored under name in the HTTPServer's CalcState.
+    The response is calc.evaluate's own dict with "expr" replaced by the
+    original "name:=expr" text. A definition is not added to the history
+    store; "ans" only ever recalls a plain evaluation's result.
+
+    calc.parse_function_definition checks for "f(x):=expr" (or "f(x,y):=
+    expr") the same way (plan step P7/S2): names.check_not_constant(name)
+    rejects a reserved function name, then the body is evaluated with the
+    params bound as plain Symbols (so a param always wins over a same-named
+    stored variable) and with every previously stored function also in
+    scope. On success, {"params": params, "body": <plain "**" str>} is
+    stored under name in CalcState, and the response's "exact" is the body
+    rendered in caret form via calc.to_caret (e.g. "x^2 + 1") -- the one
+    place that conversion happens; the stored body itself stays in plain
+    "**" form so it stays directly re-sympify()-able. A later plain
+    evaluate() call such as "f(3)" sees every stored function through
+    `functions=_state(handler).functions()` below, which rebuilds it as a
+    sympy Lambda; calling it with the wrong number of arguments is a 400,
+    never a 500 (calc.evaluate turns sympy's BadArgumentsError into a
+    CalcError).
+
     Everything above is wrapped in a catch-all: any exception this function
     did not anticipate (e.g. something calc.evaluate's own try/except does
     not cover) is still turned into a JSON 400, never left to propagate into
     a 500. This handler must never answer with a 500.
     """
-    from graphcalc import calc
+    from graphcalc import calc, names
 
     try:
         try:
@@ -129,11 +247,69 @@ def _handle_calc_evaluate(handler):
             _send_json(handler, 400, {"error": "missing parameter: expr"})
             return
         mode = payload.get("mode", "rad")
+
+        definition = calc.parse_definition(expr)
+        if definition is not None:
+            name, rhs = definition
+            try:
+                names.check_not_constant(name)
+                result = calc.evaluate(
+                    rhs,
+                    mode,
+                    last_entry=_history_store(handler).last(),
+                    variables=_state(handler).variables(),
+                    functions=_state(handler).functions(),
+                )
+            except calc.CalcError as exc:
+                _send_json(handler, 400, {"error": str(exc)})
+                return
+            if result["exact"] is not None:
+                _state(handler).set_variable(name, result["exact"])
+            response = dict(result)
+            response["expr"] = expr
+            _send_json(handler, 200, response)
+            return
+
+        function_definition = calc.parse_function_definition(expr)
+        if function_definition is not None:
+            name, params, rhs = function_definition
+            try:
+                names.check_not_constant(name)
+                result = calc.evaluate(
+                    rhs,
+                    mode,
+                    last_entry=_history_store(handler).last(),
+                    variables=_state(handler).variables(),
+                    functions=_state(handler).functions(),
+                    symbols=params,
+                )
+            except calc.CalcError as exc:
+                _send_json(handler, 400, {"error": str(exc)})
+                return
+            if result["exact"] is not None:
+                _state(handler).set_function(name, params, result["exact"])
+            response = dict(result)
+            response["expr"] = expr
+            if result["exact"] is not None:
+                response["exact"] = calc.to_caret(result["exact"])
+            _send_json(handler, 200, response)
+            return
+
         try:
-            result = calc.evaluate(expr, mode)
+            result = calc.evaluate(
+                expr,
+                mode,
+                last_entry=_history_store(handler).last(),
+                variables=_state(handler).variables(),
+                functions=_state(handler).functions(),
+            )
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})
             return
+        if result["domain_error"] is None:
+            _history_store(handler).append(
+                {"expr": expr, "exact": result["exact"], "decimal": result["decimal"]}
+            )
         _send_json(handler, 200, result)
     except Exception as exc:  # catch-all: this endpoint must never answer with a 500
         _send_json(handler, 400, {"error": f"unexpected error: {exc}"})
@@ -147,7 +323,10 @@ class Handler(BaseHTTPRequestHandler):
     - /                      -> 200 text/html, the four-tab index page
     - /static/<name>         -> see _serve_static for the allowlist and the
                                  traversal/NUL/backslash checks
-    - POST /api/calc/evaluate -> see _handle_calc_evaluate
+    - POST /api/calc/evaluate   -> see _handle_calc_evaluate
+    - GET /api/calc/history     -> see _handle_calc_history_get
+    - DELETE /api/calc/history  -> see _handle_calc_history_delete
+    - GET /api/calc/vars        -> see _handle_calc_vars_get
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -161,6 +340,12 @@ class Handler(BaseHTTPRequestHandler):
         if self.path.startswith(STATIC_PREFIX):
             _serve_static(self, self.path)
             return
+        if self.path == CALC_HISTORY_PATH:
+            _handle_calc_history_get(self)
+            return
+        if self.path == CALC_VARS_PATH:
+            _handle_calc_vars_get(self)
+            return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 
     def do_POST(self):
@@ -169,13 +354,34 @@ class Handler(BaseHTTPRequestHandler):
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 
+    def do_DELETE(self):
+        if self.path == CALC_HISTORY_PATH:
+            _handle_calc_history_delete(self)
+            return
+        _send_json(self, 404, {"error": f"not found: {self.path}"})
+
     def log_message(self, format, *args):
         return
 
 
-def build_server(port):
+def build_server(port, history_store=None, state=None):
+    """Build the HTTPServer, with a history store attached as .history_store
+    and a calc state attached as .state.
+
+    `history_store` lets a caller (tests, mainly) inject a fresh
+    HistoryStore; the default is a new InMemoryHistoryStore per server so
+    unrelated servers never share history. `state` likewise lets a caller
+    inject a CalcState (e.g. one backed by a specific file, to prove
+    variables survive a restart); the default is a new in-memory-only
+    CalcState() -- no path, so no file is ever created, which is what the
+    `--in-memory` run (and this function's own default caller, main())
+    relies on.
+    """
     host = os.environ.get("HOST", "127.0.0.1")  # the Dockerfile sets 0.0.0.0
-    return HTTPServer((host, port), Handler)
+    server = HTTPServer((host, port), Handler)
+    server.history_store = history_store if history_store is not None else InMemoryHistoryStore()
+    server.state = state if state is not None else CalcState()
+    return server
 
 
 # Process lifecycle: the black-box acceptance tests run it against the started app;

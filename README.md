@@ -36,12 +36,117 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   `mode` answers 400 with `{"error": <message>}`; a body with no `expr`
   answers 400 with `{"error": "missing parameter: expr"}`. Never a 500.
 
+  A non-real result (e.g. `"sqrt(-4)"`) keeps `exact` as sympy's `str()`
+  (`"2*I"`) and also fills `complex` with a rectangular
+  `{"real": str, "imag": str}`, each a 12-significant-digit string
+  (`"ln(-1)"` gives `complex {"real": "0", "imag": "3.14159265359"}`).
+  A result with no value answers 200 with `exact`, `decimal` and `complex`
+  all `null` and `domain_error` set instead: `"division by zero"` for a
+  division by zero (`"1/0"`), or a non-null message for an indeterminate
+  form (`"0/0"`). An undefined name parses as a free symbol, as on the
+  TI-Nspire CAS (`"2x"` gives exact `"2*x"`); while the result still has a
+  free symbol, `decimal` (and `complex`) stay `null` instead of being
+  formatted. `mode` accepts only `"rad"` or `"deg"`; any other value is a
+  400, same as a missing or non-string `expr` or a syntax error -- never
+  a 500.
+
   ```
   curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
     -H "Content-Type: application/json" \
     -d '{"expr": "1/3+1/6"}'
   # {"expr": "1/3+1/6", "exact": "1/2", "decimal": "0.5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "sqrt(-4)"}'
+  # {"expr": "sqrt(-4)", "exact": "2*I", "decimal": null, "complex": {"real": "0", "imag": "2"}, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "1/0"}'
+  # {"expr": "1/0", "exact": null, "decimal": null, "complex": null, "domain_error": "division by zero"}
   ```
+
+- `GET /api/calc/history` -- 200 `{"history": [...]}`, oldest entry first.
+  Every successful `POST /api/calc/evaluate` (no parse error, no
+  `domain_error`) appends `{"expr", "exact", "decimal"}` to the history; a
+  400 or a `domain_error` result adds nothing.
+- `DELETE /api/calc/history` -- clears the history, answers 200
+  `{"history": []}`.
+- `ans` in an expression (e.g. `"ans*2"`) substitutes the exact value of
+  the last history entry. With an empty history -- at startup, or right
+  after `DELETE /api/calc/history` -- evaluating `"ans"` answers 400
+  `{"error": "ans is undefined"}` instead of treating it as a free
+  variable.
+
+  ```
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "2+3"}'
+  # {"expr": "2+3", "exact": "5", "decimal": "5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "ans*2"}'
+  # {"expr": "ans*2", "exact": "10", "decimal": "10", "complex": null, "domain_error": null}
+
+  curl -s http://127.0.0.1:8000/api/calc/history
+  # {"history": [{"expr": "2+3", "exact": "5", "decimal": "5"}, {"expr": "ans*2", "exact": "10", "decimal": "10"}]}
+
+  curl -s -X DELETE http://127.0.0.1:8000/api/calc/history
+  # {"history": []}
+  ```
+
+- `"name:=expr"` (e.g. `"a:=5"`) defines a variable: evaluates `expr`,
+  stores its exact value under `name`, and answers 200 with the usual
+  evaluate shape, `"expr"` set back to the original `"name:=expr"` text.
+  `"f(x):=expr"` (or `"f(x,y):=expr"`, one or more comma-separated params)
+  defines a function the same way, with `"exact"` set to the body in caret
+  form (e.g. `"x^2 + 1"`). Either kind is usable in a later expression --
+  `"2a+1"` substitutes `a`'s stored value, `"f(3)"` calls the stored
+  function -- the same way `pi` or `ans` already are; calling a function
+  with the wrong number of arguments is a 400, never a 500. Redefining a
+  reserved constant or function name (`pi`, `e`, `E`, `I`, `i`, `oo`, `nan`,
+  or a built-in function name) answers 400
+  `{"error": "cannot redefine constant <name>"}` and stores nothing; a
+  right-hand side that answers a `domain_error` (e.g. `"a:=1/0"`) answers
+  200 with that error and also stores nothing.
+- `GET /api/calc/vars` -- 200 `{"variables": {name: exact}, "functions":
+  {name: {"params": [...], "body": exact}}}` for everything defined so far,
+  values and bodies both in caret form.
+
+  ```
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "a:=5"}'
+  # {"expr": "a:=5", "exact": "5", "decimal": "5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "2a+1"}'
+  # {"expr": "2a+1", "exact": "11", "decimal": "11", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "f(x):=x^2+1"}'
+  # {"expr": "f(x):=x^2+1", "exact": "x^2 + 1", "decimal": null, "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "f(3)"}'
+  # {"expr": "f(3)", "exact": "10", "decimal": "10", "complex": null, "domain_error": null}
+
+  curl -s http://127.0.0.1:8000/api/calc/vars
+  # {"variables": {"a": "5"}, "functions": {"f": {"params": ["x"], "body": "x^2 + 1"}}}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" -d '{"expr": "pi:=3"}'
+  # {"error": "cannot redefine constant pi"}
+  ```
+
+The Calculator tab (`tab-calculator`) is wired to that API, not just a
+static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
+`/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and
+`#calc-vars` refresh from `GET /api/calc/history` and `GET /api/calc/vars`
+after every successful submit, and `#calc-error` shows the JSON error's
+message on a 400 or a `domain_error` (e.g. `"1/0"` shows `"division by
+zero"`). All of it lives in `graphcalc/static/app.js`, using plain `fetch()`
+on relative paths -- no build step, no external resources -- and the page
+still only draws what those three endpoints return.
 
 ## Develop
 

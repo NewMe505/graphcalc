@@ -2,48 +2,65 @@
   "product": "graphcalc",
   "stack": "python",
   "bootstrap_commit": "b7253fb5ca7cd5f4699753269aa3ded0ee4e43bd",
-  "build_thread": null,
-  "milestones": [],
+  "build_thread": "build-graphcalc-m1",
+  "milestones": [
+    {
+      "id": "M1",
+      "title": "Server skeleton, static UI shell and core evaluation",
+      "status": "done",
+      "branch": "milestone/1",
+      "features": [
+        "P1",
+        "P2",
+        "P3",
+        "P4"
+      ],
+      "pr_number": 6,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/6",
+      "merged_commit": "2b7523657a27577867e45093c468b958cfab4a73",
+      "usd": 16.4903
+    }
+  ],
   "features": [
     {
       "id": "P1",
       "description": "The package starts, reports its version, serves a health check on 127.0.0.1, and has one passing unittest smoke test.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "5aaba05642308ae81de97e915c85473d28031509",
+      "thread": "build-graphcalc-m1-p1-a1",
+      "tier": "T0",
+      "issue": 1,
+      "usd": 1.2451
     },
     {
       "id": "P2",
       "description": "GET / serves one HTML page with four tabs (Calculator, Graphs, Lists & Statistics, CAS) plus plain CSS and JS files, with no external resources and no build step.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "d3a9bd591caeea3bacd4e7af382a902cbc3075ce",
+      "thread": "build-graphcalc-m1-p2-a1",
+      "tier": "T1",
+      "issue": 2,
+      "usd": 3.4587
     },
     {
       "id": "P3",
       "description": "POST /api/calc/evaluate takes {\"expr\":str,\"mode\":\"rad\"|\"deg\" (optional)} and answers {\"expr\",\"exact\",\"decimal\",\"complex\",\"domain_error\"} (complex and domain_error are null unless set). It parses + - * / ^, parentheses and implied multiplication. Decimals are strings with 12 significant digits and no trailing zeros.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "f2e8d3ef9daf20842519b12acf1b07f48c6f3253",
+      "thread": "build-graphcalc-m1-p3-a1",
+      "tier": "T1",
+      "issue": 3,
+      "usd": 4.2206
     },
     {
       "id": "P4",
       "description": "Supports sin, cos, tan, asin, acos, atan, ln, log (base 10), sqrt, abs, n!, pi and e, with an angle mode of \"rad\" (the default) or \"deg\".",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "e58fd5b0596284e9fe081f741c4d4719fb8b985e",
+      "thread": "build-graphcalc-m1-p4-a3",
+      "tier": "T1",
+      "issue": 4,
+      "usd": 2.421
     },
     {
       "id": "P5",
@@ -226,5 +243,5 @@
       "usd": 0.0
     }
   ],
-  "updated": "2026-10-27T22:42:35+00:00"
+  "updated": "2026-10-31T18:39:26+00:00"
 }

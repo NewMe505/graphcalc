@@ -22,6 +22,91 @@
   `graphcalc/calc.py` (the parser/evaluator, separate from HTTP) and
   `graphcalc/numfmt.py` (the shared 12-significant-digit decimal formatter,
   reused by later features).
+- `POST /api/calc/evaluate` (P5): a non-real result now answers `exact` as
+  sympy's own `str()` (e.g. `"sqrt(-4)"` -> `"2*I"`) plus a rectangular
+  `complex` form `{"real","imag"}`, each a 12-significant-digit string
+  (`"ln(-1)"` -> `complex {"real":"0","imag":"3.14159265359"}`); a real
+  result keeps `complex` `null` as before. A result with no value answers
+  200 with `exact`, `decimal` and `complex` all `null` and a `domain_error`
+  string instead: `"division by zero"` for a division by zero (`"1/0"` ->
+  `zoo`, or `oo/-oo`), a non-null message for an indeterminate form (`"0/0"`
+  -> `nan`). An undefined name parses as a sympy `Symbol` via implicit
+  multiplication (`"2x"` -> exact `"2*x"`); when the result still has free
+  symbols, `decimal` (and `complex`) stay `null` instead of being formatted.
+  `mode` accepts only `"rad"` or `"deg"` (missing keeps the existing
+  default); any other value, including a non-string one, is a 400, same as
+  a missing or non-string `expr`. Syntax errors and any other unexpected
+  failure inside the handler stay a 400, never a 500. Added
+  `graphcalc/names.py`: `check_not_constant(name)` raises the same
+  client-error exception (`CalcError` -> 400) for a reserved constant or
+  function name (`pi`, `e`, `E`, `I`, `i`, `oo`, `nan`, and the whitelisted
+  trig/log/exp/sqrt/abs names); P7's `name:=expr` variable/function
+  definitions will call it too.
+
+- Evaluation history (P6): every successful `POST /api/calc/evaluate` (no
+  parse error, no `domain_error`) is appended to an in-memory history as
+  `{"expr","exact","decimal"}`, oldest first. `GET /api/calc/history`
+  answers 200 `{"history": [...]}`. `ans` in an expression (e.g. `"ans*2"`)
+  substitutes the exact value of the last entry; with no history yet, or
+  right after `DELETE /api/calc/history`, evaluating `"ans"` answers 400
+  `{"error": "ans is undefined"}` instead of treating it as a free
+  variable. `DELETE /api/calc/history` clears the history and answers 200
+  `{"history": []}`. History lives behind a `HistoryStore` interface
+  (`graphcalc/history.py`); the only implementation today is in-memory and
+  does not survive a restart.
+
+- Variable definitions (P7/S1): `"name:=expr"` (e.g. `"a:=5"`) evaluates
+  `expr`, stores its exact value under `name`, and answers 200 with the
+  usual evaluate shape, `"expr"` set to the original `"name:=expr"` text.
+  A later expression (e.g. `"2a+1"`) substitutes the stored value the same
+  way `pi` or `ans` already do (`graphcalc/calc.py`'s `evaluate` gained a
+  `variables` parameter). Redefining a reserved constant (e.g. `"pi:=3"`)
+  answers 400 `{"error": "cannot redefine constant pi"}` via
+  `graphcalc/names.py`'s existing `check_not_constant`, and stores nothing.
+  A right-hand side with a `domain_error` (e.g. `"a:=1/0"`) answers 200
+  with the domain error and also stores nothing. New `graphcalc/state.py`:
+  `CalcState` holds `{"variables", "functions"}` (`functions` defaults to
+  `{}` so an older state file without it still loads); with no path it is
+  in-memory only (what the default server and `--in-memory` use, so no
+  file is ever created), and with a path it loads that file's JSON and
+  writes through atomically after every change, so a new `CalcState` on
+  the same path picks up where the last one left off. `"f(x):=expr"`
+  function definitions, `GET /api/calc/vars`, and the `--state` CLI flag
+  (P9) are separate, later steps.
+
+- Function definitions (P7/S2): `"f(x):=expr"` (or `"f(x,y):=expr"`, one or
+  more comma-separated params) evaluates `expr` with the params bound as
+  plain symbols, stores `{"params", "body"}` under `f`, and answers 200
+  with `"exact"` set to the body in caret form (e.g. `"x^2 + 1"`). A later
+  call (e.g. `"f(3)"`) evaluates it as a sympy `Lambda`; the wrong number of
+  arguments answers 400, never a 500. Redefining a reserved name as a
+  function (e.g. `"pi(x):=x"`) is rejected the same way a variable
+  redefinition is.
+
+- Listing variables and functions (P7/S3): `GET /api/calc/vars` answers 200
+  `{"variables": {name: exact}, "functions": {name: {"params", "body"}}}`
+  for everything stored so far, e.g. after `"a:=5"` and `"f(x):=x^2+1"`:
+  `{"variables": {"a": "5"}, "functions": {"f": {"params": ["x"], "body":
+  "x^2 + 1"}}}`. Both values and bodies are rendered in caret form, same as
+  a function definition's own response. Redefining `pi`, `e` or `I` (or any
+  other reserved name) is rejected with 400
+  `{"error": "cannot redefine constant <name>"}` before anything is
+  evaluated or stored, so the constant still evaluates normally afterwards
+  and state is left unchanged.
+
+- Calculator tab UI (P8): `GET /` now ships a working Calculator tab, not
+  just the static shell. `#calc-input` / `#calc-mode` / `#calc-submit` POST
+  `{"expr", "mode"}` to `/api/calc/evaluate` on click or on Enter in the
+  input; `#calc-history` and `#calc-vars` are rebuilt from a fresh
+  `GET /api/calc/history` and `GET /api/calc/vars` after every successful
+  submit (never patched incrementally, so they can't drift from server
+  state); `#calc-error` shows the JSON error's message on a 400 or a
+  `domain_error`, and is cleared on the next submit. All in
+  `graphcalc/static/app.js`, plain `fetch()` on relative paths, no external
+  resources; the page still draws only what those three endpoints return.
+  Added `tests/test_calc_ui.py`, pinning both acceptance criteria: `GET /`
+  contains the six `calc-*` ids, and `GET /static/app.js` mentions the three
+  API paths.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

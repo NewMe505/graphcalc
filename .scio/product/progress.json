@@ -2,7 +2,7 @@
   "product": "graphcalc",
   "stack": "python",
   "bootstrap_commit": "b7253fb5ca7cd5f4699753269aa3ded0ee4e43bd",
-  "build_thread": "build-graphcalc-m1",
+  "build_thread": "build-graphcalc-m2",
   "milestones": [
     {
       "id": "M1",
@@ -19,6 +19,22 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/6",
       "merged_commit": "2b7523657a27577867e45093c468b958cfab4a73",
       "usd": 16.4903
+    },
+    {
+      "id": "M2",
+      "title": "Calculator errors, history, variables and tab UI",
+      "status": "done",
+      "branch": "milestone/2",
+      "features": [
+        "P5",
+        "P6",
+        "P7",
+        "P8"
+      ],
+      "pr_number": 13,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/13",
+      "merged_commit": "66676f758128a2b75cc3e552f13a1e52d2732a50",
+      "usd": 17.097
     }
   ],
   "features": [
@@ -65,42 +81,42 @@
     {
       "id": "P5",
       "description": "Non-real results return 200 with an exact form and a rectangular complex form {\"real\",\"imag\"}. 200 with a domain_error only when the math has no value (1/0, 0/0). 400 for client mistakes: syntax, missing or invalid parameters, redefining a constant. An undefined name is a symbol (as on the TI-Nspire CAS); decimal is null while a free name remains.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "140e320d7e67c372ff5217fc5aa72df57d525a98",
+      "thread": "build-graphcalc-m2-p5-a1",
+      "tier": "T1",
+      "issue": 12,
+      "usd": 2.4053
     },
     {
       "id": "P6",
       "description": "Each successful evaluation is added to the history. `ans` recalls the last result.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "942dee336893dc00e2bdebedb1f6032adf8ccb3a",
+      "thread": "build-graphcalc-m2-p6-a1",
+      "tier": "T1",
+      "issue": 9,
+      "usd": 2.9876
     },
     {
       "id": "P7",
       "description": "`name:=expr` defines a variable and `f(x):=expr` defines a function; the evaluate response gives the defined value or body as exact. Both are usable in later expressions and can be listed.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "72bf2ea613f65956fe6569b34ba5f56228034ab4",
+      "thread": "build-graphcalc-m2-p7-a2",
+      "tier": "T1",
+      "issue": 10,
+      "usd": 5.454
     },
     {
       "id": "P8",
       "description": "The Calculator tab is wired to the calculator endpoints.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "13454446a5a31527493b8dfa4994f666d6facf05",
+      "thread": "build-graphcalc-m2-p8-a2",
+      "tier": "T0",
+      "issue": 11,
+      "usd": 1.4595
     },
     {
       "id": "P9",
@@ -241,7 +257,47 @@
       "tier": null,
       "issue": null,
       "usd": 0.0
+    },
+    {
+      "id": "P23",
+      "description": "Bug #5 fix: evaluate accepts only the calculator's grammar; Python operators, Python-only number literals and extra function arguments answer 400 with a JSON error.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P24",
+      "description": "Bug #7 fix: a multi-letter name such as xy is one name, as on the TI-Nspire CAS; a name is never split into letters, so e, E or I inside a name never becomes a constant.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P25",
+      "description": "Large decimals are written in scientific notation past 12 digits.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P26",
+      "description": "Bug #14 fix: no answer, variable or function the calculator stores can break a later evaluation.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
     }
   ],
-  "updated": "2026-10-31T18:39:26+00:00"
+  "updated": "2026-11-05T07:38:06+00:00"
 }

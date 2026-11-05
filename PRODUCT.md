@@ -32,6 +32,26 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 - [ ] {"expr":"sqrt(8)"} returns exact "2*sqrt(2)"; {"expr":"5!"} returns exact "120"; {"expr":"log(1000)"} returns exact "3"
 - [ ] {"expr":"2pi"} returns exact "2*pi" and decimal "6.28318530718"; {"expr":"ln(e^2)"} returns exact "2"
 
+### P23: Bug #5 fix: evaluate accepts only the calculator's grammar; Python operators, Python-only number literals and extra function arguments answer 400 with a JSON error.
+- [ ] {"expr":"1<2"}, {"expr":"2>=3"}, {"expr":"7%2"}, {"expr":"7//2"}, {"expr":"2 & 3"}, {"expr":"2 | 1"}, {"expr":"~1"} and {"expr":"1<<2"} each return 400 with a JSON error
+- [ ] {"expr":"0x10"}, {"expr":"0b11"}, {"expr":"0o7"}, {"expr":"1_000"}, {"expr":"2j"} and {"expr":"3J"} each return 400 with a JSON error
+- [ ] {"expr":"ln(e,2)"} and {"expr":"sqrt(4,2)"} each return 400 with a JSON error
+- [ ] {"expr":"1 = = 2"}, {"expr":"1==2"}, {"expr":"1 != 2"}, {"expr":"(1,2)"} and {"expr":"{1:2}"} still return 400; {"expr":"5!"} still returns exact "120" and {"expr":"a:=5"} still defines a
+
+### P24: Bug #7 fix: a multi-letter name such as xy is one name, as on the TI-Nspire CAS; a name is never split into letters, so e, E or I inside a name never becomes a constant.
+- [ ] {"expr":"rate"} returns 200 with exact "rate" and decimal null; {"expr":"xy"} returns exact "xy"
+- [ ] {"expr":"sec"}, {"expr":"deg"} and {"expr":"rate*2"} each return an exact with no E or I constant in it, and complex null
+- [ ] {"expr":"SIN(pi/2)"} returns 400 or an exact with no E or I constant in it
+- [ ] {"expr":"2x"} still returns exact "2*x", {"expr":"2pi"} "2*pi", {"expr":"ln(e^2)"} "2" and {"expr":"2sin(pi/6)"} "1"
+
+### P25: Large decimals are written in scientific notation past 12 digits.
+- [ ] {"expr":"2^100"} returns decimal "1.26765060023e30"
+
+### P26: Bug #14 fix: no answer, variable or function the calculator stores can break a later evaluation.
+- [ ] After {"expr":"beta+1"}, {"expr":"SIN(pi/2)"} or {"expr":"zeta(2)"}, {"expr":"1+1"} returns 200 with exact "2"
+- [ ] After {"expr":"a:=beta+1"} or {"expr":"f(x):=beta(x)"}, {"expr":"1+1"} returns 200 with exact "2"
+- [ ] After any input that returns 200, {"expr":"ans"} returns 200 with the same exact; checked after {"expr":"gamma"}, {"expr":"S"}, {"expr":"N"} and {"expr":"Q"}
+
 ### P5: Non-real results return 200 with an exact form and a rectangular complex form {"real","imag"}. 200 with a domain_error only when the math has no value (1/0, 0/0). 400 for client mistakes: syntax, missing or invalid parameters, redefining a constant. An undefined name is a symbol (as on the TI-Nspire CAS); decimal is null while a free name remains.
 - [ ] {"expr":"sqrt(-4)"} returns 200 with exact "2*I" and complex {"real":"0","imag":"2"}; {"expr":"ln(-1)"} returns exact "I*pi" and complex {"real":"0","imag":"3.14159265359"}
 - [ ] {"expr":"1/0"} returns 200 with exact null, decimal null and domain_error "division by zero"

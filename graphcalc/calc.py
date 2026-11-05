@@ -41,7 +41,9 @@ from sympy import (
 from sympy.parsing.sympy_parser import (
     convert_xor,
     factorial_notation,
-    implicit_multiplication_application,
+    function_exponentiation,
+    implicit_application,
+    implicit_multiplication,
     parse_expr,
     standard_transformations,
 )
@@ -49,8 +51,20 @@ from sympy.parsing.sympy_parser import (
 from graphcalc.grammar import GrammarError, check_grammar
 from graphcalc.numfmt import format_decimal
 
+# Deliberately NOT sympy's bundled implicit_multiplication_application: that
+# tuple opens with split_symbols, which breaks a multi-letter identifier such
+# as "rate" or "xy" into one symbol per letter (plan step P24/S1, Bug #7).
+# Each letter is then re-resolved against local_dict on its own, so "rate"'s
+# "e" silently becomes the constant E, "sec" becomes "E*c*s", and so on --
+# never the single name the TI-Nspire CAS (and this calculator) treats it
+# as. implicit_multiplication and implicit_application alone still give "2x",
+# "2pi" and "2sin(pi/6)" their implied multiplication/call -- they just never
+# split a name that was typed as one run of letters/digits/underscores in
+# the first place.
 _TRANSFORMATIONS = standard_transformations + (
-    implicit_multiplication_application,
+    implicit_multiplication,
+    implicit_application,
+    function_exponentiation,
     convert_xor,
     factorial_notation,
 )
@@ -210,11 +224,12 @@ DOMAIN_ERROR_UNDEFINED = "undefined"
 
 _INFINITE_RESULTS = (zoo, oo, -oo)
 
-# Bound to "ans" in local_dict whenever there is no history yet, so parse_expr's
-# implicit_multiplication_application (which includes split_symbols) never gets
-# the chance to see "ans" as an unbound name and split it into a*n*s. A Dummy is
-# never equal to anything a user could type, so finding it in the parsed
-# expression's free symbols afterwards unambiguously means the input used "ans".
+# Bound to "ans" in local_dict whenever there is no history yet, so "ans"
+# always resolves to something -- a Dummy is never equal to anything a user
+# could type, so finding it in the parsed expression's free symbols
+# afterwards unambiguously means the input used "ans" with no history to
+# give it a value, rather than "ans" simply being treated as a free
+# variable named "ans".
 _UNDEFINED_ANS = Dummy("ans")
 
 
@@ -254,8 +269,10 @@ def evaluate(
     CalcState.variables(), typically) bound into local_dict the same way --
     each value is reparsed with plain sympify(), never through
     _rad_names()/_deg_names() (that whitelist remaps "log" to log10 and
-    would double-convert degrees). A bound name is never split by
-    split_symbols, so "2a" resolves to "2*5" when a's exact value is "5".
+    would double-convert degrees). A name is never split into letters (plan
+    step P24/S1, Bug #7 fix), bound or not, so "2a" resolves to "2*5" when
+    a's exact value is "5", the same way "2x" resolves to "2*x" when "x" is
+    an unbound plain Symbol.
 
     `functions` is a name -> {"params": [...], "body": str} mapping
     (graphcalc.state's CalcState.functions(), typically; plan step P7/S2).

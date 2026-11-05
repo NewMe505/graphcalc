@@ -33,6 +33,15 @@ differently-classified one (":=" vs ":", "!=" vs "!", "==" vs "=", "//" vs
 e.g. "!=" is read as one rejected token, never as an allowed "!" followed by
 an allowed "=". Any character the regex does not recognize at all (e.g.
 "{", "}", "[", "]", "@") is rejected the same way.
+
+This module also exports called_names(expr) (plan step P24/S3, Bug #7
+fix), built on the same tokenizer: it returns every identifier in `expr`
+immediately followed by "(", so graphcalc.calc.evaluate can reject a call
+on a name its own whitelist/local_dict doesn't know -- an uppercase
+variant of a built-in such as "SIN", or a real sympy name this calculator
+never whitelisted, "zeta(2)" -- with "unknown function '<name>'" (-> 400)
+before parse_expr ever sees it, rather than letting parse_expr's
+auto_symbol fallback silently turn the call into an implicit product.
 """
 
 import re

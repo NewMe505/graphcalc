@@ -44,7 +44,15 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   all `null` and `domain_error` set instead: `"division by zero"` for a
   division by zero (`"1/0"`), or a non-null message for an indeterminate
   form (`"0/0"`). An undefined name parses as a free symbol, as on the
-  TI-Nspire CAS (`"2x"` gives exact `"2*x"`); while the result still has a
+  TI-Nspire CAS (`"2x"` gives exact `"2*x"`); a multi-letter name such as
+  `"rate"` or `"xy"` is always one symbol, never split into letters, so an
+  `e`, `E` or `I` that merely appears inside a longer name never becomes a
+  constant (`"rate"` gives exact `"rate"`, not `"E*a*r*t"`) -- `e`/`E`/`I`
+  only resolve to a constant when typed as a standalone name. Calling a
+  name this calculator doesn't whitelist, including a wrongly-cased
+  built-in such as `"SIN(pi/2)"` (the whitelist is case-sensitive; only
+  lowercase `"sin"` is a function), answers 400
+  `{"error": "unknown function '<name>'"}`. While the result still has a
   free symbol, `decimal` (and `complex`) stay `null` instead of being
   formatted. `mode` accepts only `"rad"` or `"deg"`; any other value is a
   400, same as a missing or non-string `expr` or a syntax error -- never

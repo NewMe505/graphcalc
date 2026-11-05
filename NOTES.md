@@ -4,6 +4,47 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P24 (2026-11-05, Bug #7 fix): `graphcalc/calc.py`, `graphcalc/grammar.py`.
+  Bug #7 was that `_TRANSFORMATIONS` used sympy's bundled
+  `implicit_multiplication_application`, whose first step, `split_symbols`,
+  breaks any identifier not already in `local_dict`/`global_dict` into one
+  symbol per letter and re-resolves each letter on its own -- so `"rate"`
+  evaluated to `"E*a*r*t"` (its `"e"` silently became the whitelisted
+  constant `E`), `"sec"` to `"E*c*s"`, `"deg"` to `"E*d*g"`, and
+  `"SIN(pi/2)"` (not a whitelisted name) to `"I*pi*N*S/2"` -- never the
+  single multi-letter name a TI-Nspire CAS user typed.
+  Fix (S1): `_TRANSFORMATIONS` now keeps only `implicit_multiplication`,
+  `implicit_application` and `function_exponentiation` from the bundle --
+  `split_symbols` is dropped entirely, so a run of letters/digits/
+  underscores (`graphcalc/grammar.py`'s own `_TOKEN_RE` IDENT group) always
+  parses as exactly one `Symbol`, mapped through `_rad_names()`/
+  `_deg_names()` when whitelisted, through `variables`/`functions`/a
+  function definition's own params when user-defined, and otherwise left
+  as a plain `Symbol(name)` -- `rate`, `xy`, `sec`, `deg` and `S`/`N`/`Q`
+  (real sympy singletons this calculator never whitelists) all come back
+  as themselves, with no stray `E`/`I`. Implied multiplication (`2x`,
+  `2pi`, `2sin(pi/6)`) and `e`/`E`/`I` as standalone names are unaffected,
+  since those come from `implicit_multiplication`/`implicit_application`
+  and `_rad_names()`, not `split_symbols`.
+  S3 closed a second hole the same root cause left open: without
+  `split_symbols`, an unknown name called with `"("` (`"SIN(pi/2)"`, or a
+  real sympy name this calculator never whitelisted, `"zeta(2)"`) would
+  otherwise fall to `parse_expr`'s own `auto_symbol` fallback, which wraps
+  it in a `Function` call that `implicit_multiplication`'s close-paren-
+  before-open-paren rule immediately downgrades back to a plain `Symbol`
+  times the argument list -- `"SIN(pi/2)"` silently becoming `"pi*SIN/2"`
+  instead of a 400. New `graphcalc/grammar.py::called_names(expr)` shares
+  `check_grammar`'s own tokenizer to return every identifier immediately
+  followed by `"("`; `calc.evaluate` now checks each one against the
+  completed `local_dict` and against `_GLOBAL_DICT` *before* calling
+  `parse_expr`, raising `CalcError("unknown function '<name>'")` (-> 400)
+  for anything in neither. New `tests/test_p24_names.py`, including
+  `test_p24_bare_names_no_constant` (S2: `sec`, `deg`, `S`, `N`, `Q` as
+  plain Symbols, plus `E`/`I` still resolving as constants on their own)
+  and the F1-F4 acceptance cases. No plan drift, no design question: the
+  fix is additive (drop one transformation, add one pre-parse check) and
+  every existing P5-P23 test (implied multiplication, `ans`, variables,
+  functions, the P23 grammar gate) kept passing unchanged.
 - P23 (2026-11-05, Bug #5 fix): `graphcalc/grammar.py`, new. Bug #5 was that
   `graphcalc.calc.evaluate`'s sympy `parse_expr` call -- built on Python's
   own tokenizer -- silently accepted a lot more than this calculator's

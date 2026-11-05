@@ -130,3 +130,32 @@
   (`5!` -> `120`), top-level `name:=expr` definitions, implied
   multiplication (`2x`, `2(x+1)`), and a multi-argument call to a
   user-defined function all keep working exactly as before.
+- Bug #7 (P24): a multi-letter identifier is now always one name, as on the
+  TI-Nspire CAS, never split into letters. Before this fix,
+  `graphcalc/calc.py` built its parser on sympy's bundled
+  `implicit_multiplication_application`, whose `split_symbols` step broke
+  any name not already known into one symbol per letter and re-resolved
+  each letter against the whitelist on its own -- so `{"expr": "rate"}`
+  evaluated to exact `"E*a*r*t"` (its `"e"` silently became the constant
+  `E`), `{"expr": "sec"}` to `"E*c*s"`, `{"expr": "deg"}` to `"E*d*g"`, and
+  `{"expr": "SIN(pi/2)"}` to `"I*pi*N*S/2"`. `_TRANSFORMATIONS` now uses
+  `implicit_multiplication` + `implicit_application` +
+  `function_exponentiation` instead, with `split_symbols` dropped entirely:
+  a run of letters/digits/underscores -- the same token
+  `graphcalc/grammar.py`'s tokenizer already reads as one `IDENT` -- parses
+  as exactly one `Symbol` unless it is a whitelisted constant/function or a
+  stored variable/function. `{"expr": "rate"}` now answers exact `"rate"`
+  (decimal `null`), and `{"expr": "xy"}`, `{"expr": "sec"}`, `{"expr":
+  "deg"}` and `{"expr": "rate*2"}` each answer an exact with no stray `E`
+  or `I` anywhere in it. Calling a name this calculator doesn't whitelist
+  with `(...)`, including a wrongly-cased built-in (`{"expr":
+  "SIN(pi/2)"}`, versus the whitelisted lowercase `sin`) or a real sympy
+  name this calculator never whitelisted (`zeta(2)`), now answers 400
+  `{"error": "unknown function '<name>'"}` instead of silently falling
+  back to an implicit product between an unresolved symbol and the
+  argument list. Implied multiplication by a number (`"2x"` -> `"2*x"`,
+  `"2pi"` -> `"2*pi"`, `"2sin(pi/6)"` -> `"1"`) and `e`/`E`/`I` as
+  standalone names still resolve exactly as before. New
+  `graphcalc/grammar.py::called_names()`, sharing P23's tokenizer, finds
+  every name immediately followed by `"("` so `calc.evaluate` can check it
+  against its whitelist before `parse_expr` ever runs.

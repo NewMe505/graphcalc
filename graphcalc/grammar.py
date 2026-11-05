@@ -15,10 +15,15 @@ calculator's own grammar.
 
 What stays allowed: digits/decimal-point/e-exponent numbers, identifiers,
 the operators + - * / ^ ** ( ) , ! := = (a bare "=" is allowed at the token
-level -- "1 = = 2" and "1==2" both still end up rejected: the first because
-parse_expr itself cannot parse two bare "=" tokens as an expression, the
-second because "==" is tokenized and rejected here as its own two-character
-token), postfix "!" (5! -> 120 via sympy's factorial_notation), a top-level
+level -- "1==2" is rejected right here, at the tokenizer, because "==" is
+its own two-character token; "1 = = 2" passes this tokenizer unchanged,
+since each bare "=" is individually allowed, and is instead rejected two
+steps later, inside graphcalc.calc.evaluate: parse_expr parses it into a
+plain Python bool, not a sympy object, and the very next line's
+`_UNDEFINED_ANS in parsed.free_symbols` check raises AttributeError on it
+-- the same pre-existing fallback that already rejected "1==2"/"1 != 2"
+before this fix, via evaluate's broad `except Exception` -> CalcError),
+postfix "!" (5! -> 120 via sympy's factorial_notation), a top-level
 "name:=expr" definition, and implied multiplication (2x, 2(x+1)).
 
 The tokenizer is a single ordered regex (most specific alternative first):
@@ -44,13 +49,18 @@ class GrammarError(Exception):
     """
 
 
-# Numbers: digits, an optional decimal point (with digits after it), an
-# optional e-exponent -- exactly the Python float grammar, nothing more.
-# Checked against the permissive NUMBER group's matched text below, so a
-# Python-only suffix (the "_" of "1_000", or the "j"/"J" of "2j"/"3J") is
-# told apart from a genuinely allowed number instead of silently splitting
-# into an allowed number token plus an allowed identifier token (e.g.
-# "1_000" as NUMBER "1" + IDENT "_000").
+# Numbers: one or more digits, then an optional ".", with one or more
+# digits required after it, then an optional e-exponent -- stricter than
+# Python's own float grammar in both directions that matter here: a bare
+# leading dot (".5") or a bare trailing dot ("5.") is NOT in this pattern
+# (neither \d+ is optional), even though both are valid Python/sympy floats,
+# so ".5" and "5." are rejected by this gate too (known gap, not an
+# acceptance criterion P23 lists -- see NOTES.md). Checked against the
+# permissive NUMBER group's matched text below, so a Python-only suffix
+# (the "_" of "1_000", or the "j"/"J" of "2j"/"3J") is told apart from a
+# genuinely allowed number instead of silently splitting into an allowed
+# number token plus an allowed identifier token (e.g. "1_000" as NUMBER "1"
+# + IDENT "_000").
 _STRICT_NUMBER_RE = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
 
 # Tried in this order -- longest/most specific alternative first -- so a

@@ -1,0 +1,190 @@
+"""Pre-parse grammar gate for graphcalc.calc.evaluate (plan step P23/S1).
+
+Bug #5: sympy's parse_expr uses Python's own tokenizer under the hood, so it
+silently accepts a lot more than this calculator's grammar -- Python
+comparison operators (<, >, <=, >=, ==, !=), %, //, the bitwise/shift
+operators (&, |, ~, <<, >>), Python-only numeric literals (0x10, 0b11, 0o7,
+1_000, 2j, 3J), and an extra argument to one of the calculator's built-in
+unary functions (ln(e,2), sqrt(4,2) -- sympy's own two-argument log(x, base)
+happily accepts that even though this calculator's "ln"/"log" are always
+one-argument). check_grammar(expr) runs a small regex tokenizer over `expr`
+and rejects all of that *before* parse_expr ever sees the string, so
+graphcalc.calc.evaluate turns the rejection into the usual CalcError -> 400,
+never a 500 and never a silently-accepted Python expression outside the
+calculator's own grammar.
+
+What stays allowed: digits/decimal-point/e-exponent numbers, identifiers,
+the operators + - * / ^ ** ( ) , ! := = (a bare "=" is allowed at the token
+level -- "1 = = 2" and "1==2" both still end up rejected: the first because
+parse_expr itself cannot parse two bare "=" tokens as an expression, the
+second because "==" is tokenized and rejected here as its own two-character
+token), postfix "!" (5! -> 120 via sympy's factorial_notation), a top-level
+"name:=expr" definition, and implied multiplication (2x, 2(x+1)).
+
+The tokenizer is a single ordered regex (most specific alternative first):
+every multi-character operator that shares a prefix with a shorter,
+differently-classified one (":=" vs ":", "!=" vs "!", "==" vs "=", "//" vs
+"/", "0x../0b../0o.." vs a plain number) is tried before the shorter one, so
+e.g. "!=" is read as one rejected token, never as an allowed "!" followed by
+an allowed "=". Any character the regex does not recognize at all (e.g.
+"{", "}", "[", "]", "@") is rejected the same way.
+"""
+
+import re
+
+
+class GrammarError(Exception):
+    """Raised by check_grammar for a token or call outside the calculator's grammar.
+
+    graphcalc.calc.evaluate imports this and turns it into the usual
+    CalcError -> 400. This module never imports graphcalc.calc at load time
+    -- calc.py imports *this* module, so that would be circular -- the
+    unary-function whitelist below is instead fetched with a lazy import
+    inside _unary_function_names(), done each time check_grammar runs.
+    """
+
+
+# Numbers: digits, an optional decimal point (with digits after it), an
+# optional e-exponent -- exactly the Python float grammar, nothing more.
+# Checked against the permissive NUMBER group's matched text below, so a
+# Python-only suffix (the "_" of "1_000", or the "j"/"J" of "2j"/"3J") is
+# told apart from a genuinely allowed number instead of silently splitting
+# into an allowed number token plus an allowed identifier token (e.g.
+# "1_000" as NUMBER "1" + IDENT "_000").
+_STRICT_NUMBER_RE = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
+
+# Tried in this order -- longest/most specific alternative first -- so a
+# multi-character token is never misread as two shorter ones:
+#   HEX/BIN/OCT  before NUMBER, so "0x10"/"0b11"/"0o7" are never read as the
+#                allowed number "0" followed by an allowed identifier
+#   ":="         before the stray ":" that "{1:2}" contains
+#   "!="         before the postfix "!" that "5!" uses
+#   "=="         before the bare "=" this grammar otherwise allows
+#   "//"         before the "/" this grammar otherwise allows
+_TOKEN_RE = re.compile(
+    r"""
+    (?P<HEX>0[xX][0-9a-fA-F]+)
+  | (?P<BIN>0[bB][01]+)
+  | (?P<OCT>0[oO][0-7]+)
+  | (?P<NUMBER>\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?[jJ]?)
+  | (?P<IDENT>[A-Za-z_]\w*)
+  | (?P<ASSIGN>:=)
+  | (?P<LE><=)
+  | (?P<GE>>=)
+  | (?P<EQ>==)
+  | (?P<NE>!=)
+  | (?P<SHL><<)
+  | (?P<SHR>>>)
+  | (?P<FLOORDIV>//)
+  | (?P<POW>\*\*)
+  | (?P<OP>[+\-*/^(),!<>=%&|~:{}\[\]])
+    """,
+    re.VERBOSE,
+)
+
+# Single characters the OP group can match that this grammar actually
+# allows; everything else the OP group matches (<, >, %, &, |, ~, a stray
+# :, {, }, [, ]) is a rejected token. "=" itself is allowed on purpose (see
+# the module docstring): a bare "=" is let through so parse_expr's own
+# failure to parse "1 = = 2" is what rejects it, not this tokenizer.
+_ALLOWED_OP_CHARS = frozenset("+-*/^(),!=")
+
+# Token groups that are always rejected outright regardless of the matched
+# text -- every Python comparison/bitwise-shift/floor-division operator and
+# Python-only numeric-literal prefix this calculator's grammar has no use
+# for.
+_REJECTED_GROUPS = frozenset(
+    {"HEX", "BIN", "OCT", "LE", "GE", "EQ", "NE", "SHL", "SHR", "FLOORDIV"}
+)
+
+
+def _unary_function_names():
+    """The calculator's built-in one-argument function names.
+
+    graphcalc.calc._rad_names() is the parser's own whitelist of constants
+    and functions; pi/e/E/I are constants, not callables, so they are
+    excluded here. The rest -- sqrt, sin, cos, tan, asin, acos, atan, ln,
+    log, exp, abs -- each take exactly one argument in this calculator,
+    even though sympy's own two-argument log(x, base) would otherwise let
+    an extra argument ("ln(e,2)", "sqrt(4,2)") silently through.
+
+    Imported lazily, not at module load time, because graphcalc.calc
+    imports this module -- a module-level import here would be circular.
+    """
+    from graphcalc.calc import _rad_names
+
+    return frozenset(_rad_names()) - {"pi", "e", "E", "I"}
+
+
+def _tokenize(expr):
+    """Yield (group_name, matched_text) for every token in `expr`.
+
+    Raises GrammarError for any character the tokenizer regex cannot match
+    at all -- e.g. "{", "}", "[", "]", "@", or any other symbol outside the
+    calculator's grammar.
+    """
+    pos = 0
+    length = len(expr)
+    while pos < length:
+        if expr[pos].isspace():
+            pos += 1
+            continue
+        match = _TOKEN_RE.match(expr, pos)
+        if match is None:
+            raise GrammarError(f"disallowed character in expression: {expr[pos]!r}")
+        yield match.lastgroup, match.group()
+        pos = match.end()
+
+
+def _has_top_level_comma(tokens, open_paren_index):
+    """True if the "(" at `open_paren_index` has a top-level "," before its
+    matching ")" -- i.e. the call it opens is given more than one argument.
+
+    Nested parentheses are tracked by depth, so "sqrt(sin(1,2))" (an inner
+    call's own extra argument) does not make this function return True for
+    the outer "sqrt(" -- check_grammar's own per-token loop catches the
+    inner "sin(1,2)" separately -- and "sqrt((1+2)*3)" (no comma at all) is
+    correctly left alone.
+    """
+    depth = 1
+    for group, text in tokens[open_paren_index + 1 :]:
+        if group == "OP" and text == "(":
+            depth += 1
+        elif group == "OP" and text == ")":
+            depth -= 1
+            if depth == 0:
+                return False
+        elif group == "OP" and text == "," and depth == 1:
+            return True
+    return False
+
+
+def check_grammar(expr: str) -> None:
+    """Raise GrammarError if `expr` uses anything outside the calculator's grammar.
+
+    Runs before graphcalc.calc.evaluate's sympy parse: rejects Python
+    comparison/bitwise/shift/floor-division operators, Python-only numeric
+    literals (hex/bin/oct, underscore digit grouping, a j/J imaginary
+    suffix), and an extra argument to one of the calculator's built-in
+    unary functions (ln(e,2), sqrt(4,2)). Does nothing (returns None) for
+    grammar the calculator does accept, including postfix "!", a top-level
+    "name:=expr" definition, and implied multiplication.
+    """
+    tokens = list(_tokenize(expr))
+    unary_functions = _unary_function_names()
+
+    for index, (group, text) in enumerate(tokens):
+        if group in _REJECTED_GROUPS:
+            raise GrammarError(f"disallowed operator: {text!r}")
+        if group == "NUMBER" and not _STRICT_NUMBER_RE.match(text):
+            raise GrammarError(f"disallowed number literal: {text!r}")
+        if group == "OP" and text not in _ALLOWED_OP_CHARS:
+            raise GrammarError(f"disallowed token: {text!r}")
+        if (
+            group == "IDENT"
+            and text in unary_functions
+            and index + 1 < len(tokens)
+            and tokens[index + 1] == ("OP", "(")
+            and _has_top_level_comma(tokens, index + 1)
+        ):
+            raise GrammarError(f"too many arguments to {text}")

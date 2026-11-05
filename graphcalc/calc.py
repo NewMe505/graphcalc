@@ -46,6 +46,7 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
+from graphcalc.grammar import GrammarError, check_grammar
 from graphcalc.numfmt import format_decimal
 
 _TRANSFORMATIONS = standard_transformations + (
@@ -270,6 +271,16 @@ def evaluate(
     param always wins over a stored variable of the same name when a
     function's own body is being parsed to define it.
 
+    Before any of that, graphcalc.grammar.check_grammar(expr) runs a
+    pre-parse grammar gate (plan step P23/S1, Bug #5 fix): parse_expr's own
+    Python-flavoured tokenizer would otherwise accept Python comparison
+    operators (<, >, <=, >=, ==, !=), %, //, the bitwise/shift operators
+    (&, |, ~, <<, >>), Python-only numeric literals (0x10, 0b11, 0o7,
+    1_000, 2j, 3J), and an extra argument to a built-in unary function
+    (ln(e,2), sqrt(4,2)) -- none of which belong to this calculator's own
+    grammar. A rejection there is turned into a CalcError here the same way
+    any other parse/eval failure is, so it is still a 400, never a 500.
+
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.
     """
@@ -277,6 +288,10 @@ def evaluate(
         raise CalcError(f"invalid mode: {mode}")
     if not isinstance(expr, str) or not expr.strip():
         raise CalcError("missing parameter: expr")
+    try:
+        check_grammar(expr)
+    except GrammarError as exc:
+        raise CalcError(str(exc)) from exc
 
     local_dict = _deg_names() if mode == "deg" else _rad_names()
     if variables:

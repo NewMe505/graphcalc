@@ -120,6 +120,55 @@ def test_p24_uppercase_sin_400_or_no_constant():
         assert not _has_constant_e_or_i(body["exact"]), body
 
 
+# ---- S2: a bare name that is also a sympy name/function/singleton is a
+# plain Symbol, never resolved against sympy's own global namespace ----
+
+
+def test_p24_bare_names_no_constant():
+    # "sec" and "deg" are real sympy names (the secant function; degree
+    # units), and "S", "N" and "Q" are real sympy singletons/functions (the
+    # sympify shorthand, the numeric-evaluation function, the assumptions
+    # object) -- none of them are in this calculator's own whitelist
+    # (graphcalc.calc._rad_names()), and graphcalc.calc._GLOBAL_DICT never
+    # hands parse_expr sympy's real global namespace, so each must come
+    # back as the plain name itself: a free Symbol, not the sympy object of
+    # the same spelling, and with no stray "E" or "I" constant from a
+    # split-off letter (the P24/S1 bug this step guards against staying
+    # fixed).
+    for name in ("sec", "deg", "S", "N", "Q"):
+        status, body = _evaluate(name)
+        assert status == 200, body
+        assert body["exact"] == name, body
+        assert not _has_constant_e_or_i(body["exact"]), body
+        assert body["decimal"] is None, body
+        assert body["complex"] is None, body
+
+    status, body = _evaluate("rate*2")
+    assert status == 200, body
+    assert body["exact"] == "2*rate", body
+    assert not _has_constant_e_or_i(body["exact"]), body
+    assert body["complex"] is None, body
+
+    # "E" and "I" are the one pair of single-letter names this calculator
+    # *does* whitelist on purpose (graphcalc.calc._rad_names()'s own "E" and
+    # "I" entries) -- PRODUCT.md's P5 pins "sqrt(-4)" as exact "2*I" and
+    # names.check_not_constant (tests/test_calc_definitions.py,
+    # tests/test_p5_symbols_mode.py) already rejects "I:=3" and "E:=5" as
+    # redefining a constant. P24's bug is "e, E or I *inside* a name" (e.g.
+    # "rate", "SIN") silently becoming that constant -- never the bare name
+    # typed on its own -- so a standalone "E" or "I" must keep resolving to
+    # the real constant, not fall back to a plain Symbol.
+    status, body = _evaluate("E")
+    assert status == 200, body
+    assert body["exact"] == "E", body
+    assert body["decimal"] == "2.71828182846", body
+
+    status, body = _evaluate("I")
+    assert status == 200, body
+    assert body["exact"] == "I", body
+    assert body["complex"] == {"real": "0", "imag": "1"}, body
+
+
 # ---- F4: implied multiplication by a number is kept ----
 
 

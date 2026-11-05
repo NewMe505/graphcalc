@@ -1,5 +1,5 @@
 """Tests for graphcalc.grammar.check_grammar and its use by
-graphcalc.calc.evaluate (plan step P23/S1, Bug #5 fix).
+graphcalc.calc.evaluate (plan step P23/S1 and S2, Bug #5 fix).
 
 Before this fix, sympy's parse_expr -- built on Python's own tokenizer --
 silently accepted a lot more than this calculator's grammar: Python
@@ -14,10 +14,15 @@ over HTTP, never a 500.
 The "test_grammar_operators_*" tests below are the newly-rejected cases
 (every acceptance-criteria example PRODUCT.md's P23 lists: the eight
 comparison/bitwise/shift operators, the six Python-only literals, and the
-two extra-argument calls). The "test_grammar_regression_*" tests pin what
-must keep working exactly as before: "1 = = 2", "1==2", "1 != 2", "(1,2)"
-and "{1:2}" still answer 400 (just as they did before this fix, via a
-different path -- see graphcalc.grammar's module docstring for why a bare
+two extra-argument calls). The "test_grammar_literals_*" tests (plan step
+S2) pin the same six Python-only-literal inputs (F2) under the naming that
+step asks for, plus a guard that implied multiplication by a name starting
+with "j"/"J" ("2job", "3Jane") -- the one case the literal check's "j"/"J"
+suffix could have broken -- and by an ordinary name ("2x", "2y", defined or
+left symbolic) still evaluates. The "test_grammar_regression_*" tests pin
+what must keep working exactly as before: "1 = = 2", "1==2", "1 != 2",
+"(1,2)" and "{1:2}" still answer 400 (just as they did before this fix, via
+a different path -- see graphcalc.grammar's module docstring for why a bare
 "=" is allowed at the token level), "5!" still evaluates to exact "120",
 and "a:=5" still defines the variable "a".
 """
@@ -140,6 +145,89 @@ def test_grammar_operators_ln_extra_argument_is_400():
 
 def test_grammar_operators_sqrt_extra_argument_is_400():
     _assert_rejected("sqrt(4,2)")
+
+
+# ---- F2: Python-only numeric literals (plan step S2), one test per input ----
+#
+# These pin check_grammar's literal rejection under the "test_grammar_literals_*"
+# names plan step S2 asks for, one per F2 acceptance-criteria input (the
+# test_grammar_operators_* tests above already covered the same six inputs
+# as part of F1's broader sweep -- these are kept too, deliberately
+# redundant, since the plan step calls for this exact naming).
+
+
+def test_grammar_literals_hex_is_400():
+    _assert_rejected("0x10")
+
+
+def test_grammar_literals_bin_is_400():
+    _assert_rejected("0b11")
+
+
+def test_grammar_literals_oct_is_400():
+    _assert_rejected("0o7")
+
+
+def test_grammar_literals_underscore_is_400():
+    _assert_rejected("1_000")
+
+
+def test_grammar_literals_imaginary_lower_j_is_400():
+    _assert_rejected("2j")
+
+
+def test_grammar_literals_imaginary_upper_j_is_400():
+    _assert_rejected("3J")
+
+
+# ---- F2 guard: the literal checks above must not break implied multiplication ----
+#
+# check_grammar's NUMBER token swallows a trailing "j"/"J" only when no
+# identifier character follows (see the module docstring and the NUMBER
+# pattern's "(?!\\w)" lookahead) -- otherwise "2job" or "3Jane" would get
+# misread as the rejected literal "2j"/"3J" plus a stray identifier, instead
+# of "2"/"3" times a name that happens to start with "j"/"J". These guard
+# tests pin that "2x"-style implied multiplication still evaluates, for a
+# defined variable and for a left-undefined (symbolic) one, after the F2
+# literal checks above.
+
+
+def test_grammar_literals_implied_mult_defined_symbol_still_evaluates():
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "x:=5"})
+        assert status == 200
+        assert body["exact"] == "5"
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "2x"})
+        assert status == 200
+        assert body["exact"] == "10"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_grammar_literals_implied_mult_symbolic_name_still_evaluates():
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "2y"})
+        assert status == 200
+        assert body["exact"] == "2*y"
+        assert body["decimal"] is None
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_check_grammar_accepts_implied_mult_name_starting_with_j():
+    # Without the "(?!\w)" lookahead on NUMBER's "j"/"J" suffix, this would
+    # be misread as the rejected literal "2j" plus a stray "ob" identifier.
+    check_grammar("2job")  # must not raise
+
+
+def test_check_grammar_accepts_implied_mult_name_starting_with_capital_j():
+    check_grammar("3Jane")  # must not raise
 
 
 # ---- F4 regression: must still be rejected, exactly as before this fix ----

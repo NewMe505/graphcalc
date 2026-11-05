@@ -61,12 +61,20 @@ _STRICT_NUMBER_RE = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
 #   "!="         before the postfix "!" that "5!" uses
 #   "=="         before the bare "=" this grammar otherwise allows
 #   "//"         before the "/" this grammar otherwise allows
+#
+# The trailing "[jJ]" of NUMBER carries a negative lookahead, "(?!\w)", so it
+# is only consumed when no identifier character follows: "2j"/"3J" alone
+# still match NUMBER with the "j"/"J" included (and are then rejected below
+# by _STRICT_NUMBER_RE, which has no "j"/"J" in its grammar), but implied
+# multiplication by a name that happens to start with "j"/"J" -- "2job",
+# "3Jane" -- instead stops NUMBER at "2"/"3" and leaves "job"/"Jane" to match
+# IDENT, exactly like "2x" or "2y" does.
 _TOKEN_RE = re.compile(
     r"""
     (?P<HEX>0[xX][0-9a-fA-F]+)
   | (?P<BIN>0[bB][01]+)
   | (?P<OCT>0[oO][0-7]+)
-  | (?P<NUMBER>\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?[jJ]?)
+  | (?P<NUMBER>\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?(?:[jJ](?!\w))?)
   | (?P<IDENT>[A-Za-z_]\w*)
   | (?P<ASSIGN>:=)
   | (?P<LE><=)

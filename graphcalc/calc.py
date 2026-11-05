@@ -48,7 +48,7 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
-from graphcalc.grammar import GrammarError, check_grammar
+from graphcalc.grammar import GrammarError, called_names, check_grammar
 from graphcalc.numfmt import format_decimal
 
 # Deliberately NOT sympy's bundled implicit_multiplication_application: that
@@ -298,6 +298,16 @@ def evaluate(
     grammar. A rejection there is turned into a CalcError here the same way
     any other parse/eval failure is, so it is still a 400, never a 500.
 
+    Once local_dict is complete, graphcalc.grammar.called_names(expr) is
+    checked against it and against _GLOBAL_DICT (plan step P24/S3, Bug #7
+    fix): a name called with "(" that is in neither -- an uppercase variant
+    of a whitelisted function such as "SIN", or a real sympy name this
+    calculator never whitelisted, such as "zeta" -- raises CalcError
+    ("unknown function '<name>'") before parse_expr ever sees it, rather
+    than letting parse_expr's own auto_symbol/implicit_multiplication
+    fallback silently turn the call into an implicit product between an
+    unresolved Symbol and the parenthesised argument list.
+
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.
     """
@@ -323,6 +333,25 @@ def evaluate(
         local_dict["ans"] = (
             sympify(last_entry["exact"]) if last_entry is not None else _UNDEFINED_ANS
         )
+        # A name called with "(" that is in neither local_dict (the rad/deg
+        # whitelist, a stored variable or function, a function definition's
+        # own param, "ans") nor _GLOBAL_DICT is unknown *and* undefined --
+        # never a function this calculator can call (plan step P24/S3, Bug
+        # #7 fix). Rejected here, before parse_expr ever runs, so an
+        # uppercase name such as "SIN" in "SIN(pi/2)" (not the same name as
+        # the whitelisted, lowercase "sin") or a real sympy name this
+        # calculator never whitelisted ("zeta(2)") is a 400 with
+        # "unknown function '<name>'" -- never left for parse_expr's own
+        # auto_symbol fallback, which would otherwise wrap the call in a
+        # Function(...) that implicit_multiplication's close-paren-before-
+        # open-paren rule immediately downgrades back to a plain Symbol
+        # times the argument list (e.g. "SIN(pi/2)" -> "pi*SIN/2") -- a
+        # name is matched exactly and case-sensitively, never resolved by
+        # building a Function object whose own str() (e.g. "SIN(...)")
+        # would contain the letter I.
+        for name in called_names(expr):
+            if name not in local_dict and name not in _GLOBAL_DICT:
+                raise CalcError(f"unknown function '{name}'")
         parsed = parse_expr(
             expr,
             transformations=_TRANSFORMATIONS,

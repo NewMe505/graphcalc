@@ -177,6 +177,45 @@ def _has_top_level_comma(tokens, open_paren_index):
     return False
 
 
+def called_names(expr: str) -> set:
+    """Return every identifier immediately followed by "(" in `expr`.
+
+    Shares check_grammar's own tokenizer (plan step P24/S3, Bug #7 fix):
+    this is how graphcalc.calc.evaluate tells a genuine call -- "sin(x)" on
+    one of this calculator's own built-ins, or "f(3)" on a user-stored
+    function -- from a call-looking expression on a name the evaluator does
+    not otherwise know, such as the uppercase "SIN(pi/2)" or a real sympy
+    name this calculator never whitelisted, "zeta(2)".
+
+    evaluate() calls this *after* building its final local_dict (the
+    rad/deg whitelist, stored variables and functions, a function
+    definition's own params, "ans"), then rejects any name this returns
+    that is in neither local_dict nor its own global_dict with "unknown
+    function '<name>'" -- a 400, raised before parse_expr ever runs.
+    Without that check, sympy's own parser -- lacking any whitelist entry
+    to call -- falls back to auto_symbol's generic "undefined name follow
+    by (" handling: it wraps the name in a call to the *Function*
+    constructor (never left bound, because the very next step,
+    implicit_multiplication's own close-paren-before-open-paren rule, downgrades
+    that right back to a plain Symbol and inserts a "*"), so "SIN(pi/2)"
+    would otherwise silently become the implicit product "pi*SIN/2" instead
+    of the 400 a call on an unknown name should be. This function only
+    reports the name was *called*; it has no opinion on whether that name
+    turns out to be known -- the caller decides that by checking its own
+    local_dict and global_dict.
+    """
+    tokens = list(_tokenize(expr))
+    names = set()
+    for index, (group, text) in enumerate(tokens):
+        if (
+            group == "IDENT"
+            and index + 1 < len(tokens)
+            and tokens[index + 1] == ("OP", "(")
+        ):
+            names.add(text)
+    return names
+
+
 def check_grammar(expr: str) -> None:
     """Raise GrammarError if `expr` uses anything outside the calculator's grammar.
 

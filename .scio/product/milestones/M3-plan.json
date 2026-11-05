@@ -1,0 +1,27 @@
+{
+ "number": 3,
+ "title": "Evaluator grammar, naming and robustness fixes",
+ "branch": "milestone/3",
+ "features": [
+  {
+   "id": "P23",
+   "tier": "T1",
+   "notes": "Accept only the calculator grammar. Before the sympy parse, run a token/grammar check that rejects Python comparison, %, //, bitwise and shift operators, hex/bin/oct/underscore/j literals, and extra arguments to unary functions. Keep 5!, := and implied multiplication working. Add a unittest for each listed input."
+  },
+  {
+   "id": "P24",
+   "tier": "T1",
+   "notes": "Treat a multi-letter identifier as one symbol. Drop letter splitting and map only known names (pi, e, function names). E, I, S, N, Q and similar names become plain Symbols. Keep 2x, 2pi and 2sin(...) working. Share the tokenizer with P23."
+  },
+  {
+   "id": "P25",
+   "tier": "T0",
+   "notes": "Decimal formatting only. Past 12 digits, use scientific notation with 12 significant digits and no trailing zeros, e.g. 1.26765060023e30. Existing decimal tests must still pass."
+  },
+  {
+   "id": "P26",
+   "tier": "T1",
+   "notes": "Store ans, variables and functions as sympy objects or in a form that parses again, so names like beta, zeta, gamma, S, N and Q never break a later evaluation. ans must give back the same exact string. Builds on P24. Add a regression test for each listed sequence."
+  }
+ ]
+}

@@ -4,6 +4,52 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P23 (2026-11-05, Bug #5 fix): `graphcalc/grammar.py`, new. Bug #5 was that
+  `graphcalc.calc.evaluate`'s sympy `parse_expr` call -- built on Python's
+  own tokenizer -- silently accepted a lot more than this calculator's
+  grammar. `check_grammar(expr)` now runs before every `parse_expr` call
+  (both the plain-expression and the `name:=expr`/`f(x):=expr` definition
+  paths in `graphcalc/cli.py`) and raises `grammar.GrammarError`, caught in
+  `calc.evaluate` and re-raised as the usual `CalcError` -> 400, never a 500.
+  The accepted grammar, spelled out for the next session:
+  - Numbers: digits, an optional decimal point with digits after it, an
+    optional `e`/`E` exponent -- exactly Python's float grammar. No hex
+    (`0x10`), no binary (`0b11`), no octal (`0o7`), no underscore digit
+    grouping (`1_000`), no imaginary suffix (`2j`, `3J`).
+  - Operators: `+ - * / ^ ** ( ) , !`. No comparison (`< > <= >= == !=`), no
+    `%`, no `//`, no bitwise/shift (`& | ~ << >>`). A bare `=` is let through
+    at the token level on purpose -- `parse_expr`'s own failure to parse two
+    bare `=` tokens is what rejects `"1 = = 2"`, and `"=="` is tokenized and
+    rejected as its own two-character token, so `"1==2"` is rejected here
+    instead.
+  - Postfix `!` (`5!` -> `120`, via sympy's `factorial_notation`), top-level
+    `name:=expr` definitions, and implied multiplication (`2x`, `2(x+1)`)
+    all stay allowed, exactly as before this fix.
+  - A call to one of the calculator's built-in one-argument functions
+    (`sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ln`, `log`, `exp`,
+    `abs` -- `graphcalc.calc._rad_names()` minus the constants `pi`/`e`/`E`/`I`)
+    is rejected if it has more than one top-level, comma-separated argument
+    (`ln(e,2)`, `sqrt(4,2)`); a call to any other name (e.g. a user-defined
+    function `f(x,y):=...`) is left alone, since this grammar gate has no
+    way to know a user function's own arity and `calc.evaluate`'s existing
+    "wrong number of arguments" check already handles that case.
+  - Everything else the tokenizer doesn't recognize at all (`{`, `}`, `[`,
+    `]`, `@`, ...) is rejected too, so `"{1:2}"` and `"(1,2)"` both still
+    answer 400 (the latter via `parse_expr` itself refusing a bare tuple,
+    same as before this fix -- `check_grammar` lets a lone `,` through so a
+    function call's own argument separator keeps working).
+  Implemented across three steps: S1 added the tokenizer and the rejected
+  operator/literal groups; S2 added `test_grammar_literals_*`-named tests
+  pinning the six Python-only-literal inputs plus an implied-multiplication
+  guard for names starting with `j`/`J` (`2job`, `3Jane`); S3 added the
+  per-function arity count (`_has_top_level_comma`, depth-tracked past
+  nested parens) and the `test_grammar_arity_*`-named tests for `ln(e,2)`/
+  `sqrt(4,2)` plus a guard that `sqrt(4)` still answers exact `"2"`. See
+  `graphcalc/grammar.py`'s own module and function docstrings for the
+  tokenizer's ordering rules (why HEX/BIN/OCT must be tried before NUMBER,
+  why `:=`/`!=`/`==`/`//` must be tried before their shorter prefixes) and
+  `tests/test_evaluate_grammar.py`'s docstring for the full test-naming
+  rationale.
 - P8 (2026-10-31): Calculator tab UI, in `graphcalc/static/index.html` and
   `graphcalc/static/app.js` only, per the plan's file list. Added the six
   ids PRODUCT.md pins inside `tab-calculator`: `calc-input`, `calc-mode`

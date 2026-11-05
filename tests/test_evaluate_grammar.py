@@ -147,6 +147,33 @@ def test_grammar_operators_sqrt_extra_argument_is_400():
     _assert_rejected("sqrt(4,2)")
 
 
+# ---- F3: extra arguments to a unary function (plan step S3), under the
+# "test_grammar_arity_*" naming that step asks for -- same two inputs the
+# "test_grammar_operators_*" tests above already cover, deliberately
+# redundant, plus the guard test S3 calls for that a single-argument call
+# still evaluates once the arity check is in place. ----
+
+
+def test_grammar_arity_ln_extra_argument_is_400():
+    _assert_rejected("ln(e,2)")
+
+
+def test_grammar_arity_sqrt_extra_argument_is_400():
+    _assert_rejected("sqrt(4,2)")
+
+
+def test_grammar_arity_sqrt_single_argument_still_evaluates():
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "sqrt(4)"})
+        assert status == 200
+        assert body["exact"] == "2"
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
 # ---- F2: Python-only numeric literals (plan step S2), one test per input ----
 #
 # These pin check_grammar's literal rejection under the "test_grammar_literals_*"

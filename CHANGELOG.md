@@ -113,3 +113,20 @@
   byte, a backslash or an absolute segment in the decoded name outright, and
   require the resolved path to stay inside `STATIC_DIR.resolve()`. Unknown
   routes (e.g. `/server.py`) keep answering a JSON 404, never a 500.
+
+### Fixed
+- Bug #5 (P23): `POST /api/calc/evaluate` (and the `name:=expr`/
+  `f(x):=expr` definition paths) now accept only this calculator's own
+  grammar, via a new pre-parse gate, `graphcalc/grammar.py`. Before this
+  fix, sympy's `parse_expr` -- built on Python's own tokenizer -- silently
+  accepted Python syntax outside the calculator's grammar. Every one of the
+  following now answers 400 with a JSON error instead of a Python-semantics
+  result: the comparison operators `< > <= >= == !=`, `%`, `//`, the
+  bitwise/shift operators `& | ~ << >>`; the Python-only numeric literals
+  `0x10`, `0b11`, `0o7`, `1_000`, `2j`, `3J`; and an extra argument to a
+  built-in one-argument function, e.g. `ln(e,2)` or `sqrt(4,2)` (sympy's own
+  two-argument `log(x, base)` previously let that through even though this
+  calculator's `ln`/`sqrt`/etc. are always one-argument). Postfix `!`
+  (`5!` -> `120`), top-level `name:=expr` definitions, implied
+  multiplication (`2x`, `2(x+1)`), and a multi-argument call to a
+  user-defined function all keep working exactly as before.

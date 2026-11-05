@@ -4,6 +4,33 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P25 (2026-11-05, decimal formatting): `graphcalc/numfmt.py`. Before this
+  fix, `format_decimal` always rounded to 12 significant digits with
+  `Decimal`'s context precision, then printed with `format(digits, "f")` --
+  fixed-point only. Decimal's context rounding keeps the original exponent,
+  so a value needing more than 12 integer digits (e.g. `2**100`, 31 digits)
+  came back as the 12 rounded digits followed by the right number of
+  literal zeros (`"1267650600230000000000000000000"`-shaped), not a
+  12-significant-digit value -- and the existing "strip trailing zeros"
+  step never fired because a whole number has no `"."` in fixed-point text.
+  Fix: after rounding, check the rounded `Decimal`'s `adjusted()` (the
+  position of its leading digit); once that reaches `sig` (12), format with
+  `format(digits, "E")` instead, strip trailing zeros from the mantissa the
+  same way the fixed-point path already strips them, and rebuild as
+  `f"{mantissa}e{int(exponent)}"` -- `int()` on the exponent drops the `+`
+  and any leading zeros `Decimal`'s `"E"` format would otherwise print.
+  `2**100` -> decimal `"1.26765060023e30"`. The threshold is exactly `sig`
+  digits: a 12-digit integer (`10**11`) still prints fixed-point; a
+  13-digit one (`10**12`) already switches (`"1e12"`). Every magnitude
+  `format_decimal` already handled correctly (small fractions, exact
+  integers under 12 digits) is untouched -- the new branch only runs when
+  `adjusted() >= sig`. Added `tests/test_p25_scientific_notation.py`: the
+  F1 acceptance case over HTTP, plus unit tests on `format_decimal` directly
+  for the exact-12-digit/13-digit boundary, a negative large value, a
+  mantissa that must not pad out with trailing zeros, and a regression
+  check on the small-magnitude values from earlier steps. No plan drift, no
+  design question: formatting-only change, one function, no caller needed
+  updating.
 - P24 (2026-11-05, Bug #7 fix): `graphcalc/calc.py`, `graphcalc/grammar.py`.
   Bug #7 was that `_TRANSFORMATIONS` used sympy's bundled
   `implicit_multiplication_application`, whose first step, `split_symbols`,

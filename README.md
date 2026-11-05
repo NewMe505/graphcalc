@@ -32,7 +32,12 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   `{"expr", "exact", "decimal", "complex", "domain_error"}`: `exact` is
   sympy's simplified result as a string, `decimal` is a 12-significant-digit
   string with no trailing zeros (e.g. `"1/3"` gives `"0.333333333333"`), and
-  `complex`/`domain_error` are `null` unless set. A parse error or an invalid
+  `complex`/`domain_error` are `null` unless set. Once a value's magnitude
+  needs more than 12 digits before the decimal point, `decimal` (and
+  `complex`'s `real`/`imag`) switch to scientific notation instead --
+  `"2^100"` gives `"1.26765060023e30"`, 12 significant digits, no trailing
+  zeros in the mantissa, lowercase `e`, no `+` and no leading zeros in the
+  exponent. A parse error or an invalid
   `mode` answers 400 with `{"error": <message>}`; a body with no `expr`
   answers 400 with `{"error": "missing parameter: expr"}`. Never a 500.
 
@@ -73,6 +78,11 @@ The calculator's math goes through a JSON API, one endpoint per operation:
     -H "Content-Type: application/json" \
     -d '{"expr": "1/0"}'
   # {"expr": "1/0", "exact": null, "decimal": null, "complex": null, "domain_error": "division by zero"}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "2^100"}'
+  # {"expr": "2^100", "exact": "1267650600228229401496703205376", "decimal": "1.26765060023e30", "complex": null, "domain_error": null}
   ```
 
 - `GET /api/calc/history` -- 200 `{"history": [...]}`, oldest entry first.

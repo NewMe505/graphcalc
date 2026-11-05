@@ -107,6 +107,22 @@
   Added `tests/test_calc_ui.py`, pinning both acceptance criteria: `GET /`
   contains the six `calc-*` ids, and `GET /static/app.js` mentions the three
   API paths.
+- `decimal` (and `complex`'s `real`/`imag`) now switch to scientific
+  notation once a value's magnitude needs more than 12 digits before the
+  decimal point (P25): `{"expr": "2^100"}` answers decimal
+  `"1.26765060023e30"` instead of the literal 31-digit integer rounded to
+  12 significant figures and padded out with 19 zeros. The threshold is
+  exact: a 12-digit integer (`10**11`) still prints fixed-point
+  (`"100000000000"`); a 13-digit one (`10**12`) already switches
+  (`"1e12"`). The scientific form keeps the same 12-significant-digit
+  precision and trailing-zero stripping as the fixed-point form, now
+  applied to the mantissa, with a lowercase `e`, no `+`, and no leading
+  zeros in the exponent; a negative value keeps its sign on the mantissa
+  (`-2^100` -> `"-1.26765060023e30"`). All in the one shared
+  `graphcalc/numfmt.py::format_decimal`, so every current and future
+  caller (today, `decimal` and `complex` in `graphcalc/calc.py`) gets the
+  same behavior for free. Smaller magnitudes are unaffected. Added
+  `tests/test_p25_scientific_notation.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

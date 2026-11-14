@@ -196,21 +196,71 @@ def to_caret(exact: str) -> str:
     return exact.replace("**", "^")
 
 
-def _function_locals(functions: dict) -> dict:
-    """Build {name: Lambda(params_as_Symbols, body)} for every stored function.
+def _function_locals(functions: dict, referenced: set) -> dict:
+    """Build {name: Lambda(params_as_Symbols, body)} for every *referenced*
+    stored function (plan step P26/S2, Bug #14 fix).
 
     `functions` is graphcalc.state.CalcState.functions()'s mapping: name ->
-    {"params": [str, ...], "body": <plain sympy str, "**" notation>}. Each
-    Lambda is rebuilt fresh from the stored strings every call -- including
-    right after a disk reload, since CalcState only ever stores plain
-    strings, never a Lambda object itself.
+    {"params": [str, ...], "body": <plain sympy str, "**" notation>,
+    "body_srepr": <srepr str, or None for a function stored before this
+    fix>}. Only a name in `referenced` (evaluate()'s own _referenced_names
+    (expr)) is ever rebuilt here -- the same lazy rule evaluate() already
+    applies to a stored "ans" (P26/S1) and a stored variable (see
+    _rebuild_stored_value just above): an expression that never calls a
+    given function can never be broken by that function's body being
+    impossible to rebuild.
+
+    The body is rebuilt from "body_srepr" when it is not None -- srepr()'s
+    quoted Symbol('name') constructor arguments can never resolve against
+    sympy's own namespace the way a bare name in a plain str() rebuild can
+    (see the "ans" paragraph of evaluate()'s docstring for the full
+    explanation), so this is safe regardless of what the name would
+    otherwise mean bare -- e.g. "beta", a real sympy function, not just a
+    free symbol, in sympy's own namespace. "body_srepr" is None for a
+    function this calculator stored before this fix (no srepr was ever
+    persisted for it then); "body" -- plain sympify(), never the restricted
+    local_dict/global_dict a user's own input parses with -- is the
+    fallback for that case, unchanged from before this fix.
     """
     built = {}
     for name, spec in functions.items():
+        if name not in referenced:
+            continue
         params = tuple(Symbol(p) for p in spec["params"])
-        body = sympify(spec["body"])
+        body_srepr = spec.get("body_srepr")
+        body = sympify(body_srepr) if body_srepr is not None else sympify(spec["body"])
         built[name] = Lambda(params, body)
     return built
+
+
+def _rebuild_stored_value(value):
+    """Rebuild a stored variable's value into a sympy object (plan step
+    P26/S2, Bug #14 fix).
+
+    `value` is either the current CalcState shape, {"exact": str, "srepr":
+    str | None}, or a plain exact string -- the shape every variable had
+    before this fix, still accepted here both for a state file written by
+    an older version of this calculator and for a caller that passes the
+    `variables` dict to evaluate() directly (several existing unit tests
+    do). "srepr", when present and not None, is preferred: srepr()'s quoted
+    Symbol('name') constructor arguments can never resolve against sympy's
+    own namespace the way a bare name in a plain str() rebuild can (see the
+    "ans" paragraph of evaluate()'s docstring for the full explanation), so
+    this is the only rebuild that is safe regardless of what the name would
+    otherwise mean bare -- e.g. "beta", a real sympy function. Falls back
+    to plain sympify() of the exact string when there is no srepr to use,
+    the same rebuild this calculator always used before this fix.
+
+    Can raise -- evaluate() only calls this for a name `expr` actually
+    references (see _referenced_names), so a failure here becomes the
+    usual CalcError -> 400 for that expression, never left to break an
+    unrelated one that never mentions the name at all.
+    """
+    if isinstance(value, dict):
+        srepr_value = value.get("srepr")
+        exact_value = value.get("exact")
+        return sympify(srepr_value) if srepr_value is not None else sympify(exact_value)
+    return sympify(value)
 
 
 class CalcError(Exception):
@@ -234,23 +284,28 @@ _INFINITE_RESULTS = (zoo, oo, -oo)
 _UNDEFINED_ANS = Dummy("ans")
 
 
-def _references_ans(expr: str) -> bool:
-    """True if `expr` contains the identifier "ans" as a whole token.
+def _referenced_names(expr: str) -> set:
+    """Return every identifier `expr` contains as a whole token.
 
-    Plan step P26/S1, Bug #14 fix: evaluate() only attempts to rebuild "ans"
-    (a possibly-failing step -- see `last_entry` below) when the expression
-    actually mentions it, so an expression that never uses "ans" can never
-    be broken by a stored ans that happens to be unsafe to rebuild.
+    Plan step P26/S2, Bug #14 fix: generalizes P26/S1's single-name check
+    (then named _references_ans) to every stored variable and function
+    name too. evaluate() only attempts to rebuild a stored "ans", variable
+    or function (each a possibly-failing step -- see `_rebuild_stored_value`
+    and `_function_locals` above) when its name is in this set, so an
+    expression that never mentions a given name can never be broken by that
+    name's stored value or body being unsafe, or outright impossible, to
+    rebuild -- "1+1" is never affected by an unrebuildable stored "a", no
+    matter how "a" was stored.
 
     Shares graphcalc.grammar's own tokenizer (the same one called_names()
     and check_grammar() already use) so this matches token boundaries
     exactly the way the rest of the grammar does: "2ans" (implicit
-    multiplication) counts as a reference, "answer" does not -- a plain
-    substring/regex check on `expr` would get the first case backwards (the
-    character before "ans" is the digit "2", not a letter, but "2" and
-    "ans" are still two separate tokens).
+    multiplication) counts as a reference to "ans", "answer" does not -- a
+    plain substring/regex check on `expr` would get the first case
+    backwards (the character before "ans" is the digit "2", not a letter,
+    but "2" and "ans" are still two separate tokens).
     """
-    return any(group == "IDENT" and text == "ans" for group, text in _tokenize(expr))
+    return {text for group, text in _tokenize(expr) if group == "IDENT"}
 
 
 def evaluate(
@@ -277,7 +332,7 @@ def evaluate(
 
     `last_entry` is graphcalc.state.CalcState.ans() -- {"exact": str,
     "srepr": str} for the last successful plain evaluation, or None when
-    there is none yet (plan step P26/S1, Bug #14 fix). _references_ans(expr)
+    there is none yet (plan step P26/S1, Bug #14 fix). _referenced_names(expr)
     decides, before anything else, whether `expr` mentions "ans" as a whole
     token (never as a substring of another name such as "answer", and
     always counting an implicit-multiplication use such as "2ans"); only
@@ -311,31 +366,43 @@ def evaluate(
     already-simplified object two different ways, and keeping repeated
     "ans" recall a true fixed point.
 
-    The returned dict also carries a private "_ans_srepr" key -- srepr() of
-    this call's own result, or None when domain_error is set -- so
-    graphcalc.cli can thread it straight into CalcState.set_ans(exact,
-    srepr) for the *next* call's "ans" without re-deriving it (ambiguously)
-    from the plain `exact` string. It is not part of this function's
-    public, documented response shape: a caller that forwards this dict as
-    an HTTP response body must pop it first.
+    The returned dict also carries a private "_result_srepr" key -- srepr()
+    of this call's own result, or None when domain_error is set -- so
+    graphcalc.cli can thread it straight into CalcState.set_ans/set_variable/
+    set_function for the *next* call's "ans", or for that same variable or
+    function body, without re-deriving it (ambiguously) from the plain
+    `exact` string. It is not part of this function's public, documented
+    response shape: a caller that forwards this dict as an HTTP response
+    body must pop it first.
 
-    `variables` is a name -> exact-value-string mapping (graphcalc.state's
-    CalcState.variables(), typically) bound into local_dict the same way --
-    each value is reparsed with plain sympify(), never through
-    _rad_names()/_deg_names() (that whitelist remaps "log" to log10 and
-    would double-convert degrees). A name is never split into letters (plan
-    step P24/S1, Bug #7 fix), bound or not, so "2a" resolves to "2*5" when
-    a's exact value is "5", the same way "2x" resolves to "2*x" when "x" is
-    an unbound plain Symbol.
+    `variables` is a name -> value mapping (graphcalc.state's CalcState.
+    variables(), typically; plan step P26/S2, Bug #14 fix). Each value is
+    either the current CalcState shape, {"exact": str, "srepr": str |
+    None}, or a plain exact-value string -- the shape every variable had
+    before P26/S2, still accepted here for a state file written by an
+    older version of this calculator, or a caller that builds the dict by
+    hand (several unit tests do). Only a name _referenced_names(expr)
+    finds in `expr` is ever bound into local_dict at all -- see
+    _rebuild_stored_value's own docstring for why, and for which of
+    "srepr"/"exact" it prefers; this is the same lazy, srepr-first rule
+    `last_entry`/"ans" above already follows. A name is never split into
+    letters (plan step P24/S1, Bug #7 fix), bound or not, so "2a" resolves
+    to "2*5" when a's exact value is "5", the same way "2x" resolves to
+    "2*x" when "x" is an unbound plain Symbol.
 
-    `functions` is a name -> {"params": [...], "body": str} mapping
-    (graphcalc.state's CalcState.functions(), typically; plan step P7/S2).
-    _function_locals() rebuilds each one as a fresh sympy Lambda(params,
-    body) and binds it the same way, so "f(3)" calls the Lambda directly --
-    the same mechanism "sin(30)" already uses for a whitelisted name. Calling
-    a bound function with the wrong number of arguments raises sympy's
-    BadArgumentsError, caught below like any other parse/eval failure and
-    turned into a CalcError, never left to propagate as a 500.
+    `functions` is a name -> {"params": [...], "body": str, "body_srepr":
+    str | None} mapping (graphcalc.state's CalcState.functions(),
+    typically; plan step P7/S2, extended by P26/S2). _function_locals()
+    rebuilds, as a fresh sympy Lambda(params, body), only a name
+    _referenced_names(expr) finds in `expr` -- the same lazy rule
+    `variables` above follows, and for the same reason: a function this
+    calculator cannot safely rebuild must never break an expression that
+    never calls it. The rebuilt Lambda is bound the same way, so "f(3)"
+    calls it directly -- the same mechanism "sin(30)" already uses for a
+    whitelisted name. Calling a bound function with the wrong number of
+    arguments raises sympy's BadArgumentsError, caught below like any other
+    parse/eval failure and turned into a CalcError, never left to
+    propagate as a 500.
 
     `symbols` is a list of names (a function definition's own params) bound
     to plain sympy Symbol(name) instead, applied after `variables` so a
@@ -375,17 +442,25 @@ def evaluate(
         raise CalcError(str(exc)) from exc
 
     local_dict = _deg_names() if mode == "deg" else _rad_names()
-    if variables:
-        for name, value in variables.items():
-            local_dict[name] = sympify(value)
     stored_srepr = None
     try:
+        # Lazy rebuild (plan step P26/S2, Bug #14 fix): a stored variable
+        # or function is only ever rebuilt when `expr` actually references
+        # its name, exactly the same rule already applied to "ans" below --
+        # so a definition this calculator cannot safely rebuild (one stored
+        # before this fix, or a hand-edited state file) can never break an
+        # expression that never mentions it, such as "1+1".
+        referenced = _referenced_names(expr)
+        if variables:
+            for name, value in variables.items():
+                if name in referenced:
+                    local_dict[name] = _rebuild_stored_value(value)
         if functions:
-            local_dict.update(_function_locals(functions))
+            local_dict.update(_function_locals(functions, referenced))
         if symbols:
             for name in symbols:
                 local_dict[name] = Symbol(name)
-        if _references_ans(expr):
+        if "ans" in referenced:
             stored_srepr = last_entry.get("srepr") if last_entry is not None else None
             local_dict["ans"] = (
                 sympify(stored_srepr) if stored_srepr is not None else _UNDEFINED_ANS
@@ -458,16 +533,18 @@ def evaluate(
                 "imag": format_decimal(im_part),
             }
 
-    # "_ans_srepr": the srepr() this call's own result should be recalled
-    # by next time "ans" is used -- never derived from the plain `exact`
-    # string (see the big paragraph above for why that is ambiguous for a
-    # name such as "beta" or "gamma"). The fixed-point branch above reuses
-    # the previously-stored srepr verbatim, for the same reason it reuses
-    # `exact` verbatim. None on a domain error: a result with no value is
-    # never stored as "ans" (graphcalc.cli only calls CalcState.set_ans
-    # when domain_error is None). Private: graphcalc.cli must pop this key
+    # "_result_srepr": the srepr() this call's own result should be rebuilt
+    # from, whether it is later recalled as "ans" (plan step P26/S1) or
+    # stored as a variable's value or a function's body (plan step P26/S2)
+    # -- never derived from the plain `exact` string (see the big paragraph
+    # above for why that is ambiguous for a name such as "beta" or
+    # "gamma"). The fixed-point branch above reuses the previously-stored
+    # srepr verbatim, for the same reason it reuses `exact` verbatim. None
+    # on a domain error: a result with no value is never stored as "ans", a
+    # variable or a function body (graphcalc.cli only persists one when
+    # domain_error is None). Private: graphcalc.cli must pop this key
     # before forwarding the rest of this dict as an HTTP response body.
-    ans_srepr = None if domain_error is not None else (
+    result_srepr = None if domain_error is not None else (
         stored_srepr if exact_override is not None else srepr(result)
     )
 
@@ -477,5 +554,5 @@ def evaluate(
         "decimal": decimal,
         "complex": complex_value,
         "domain_error": domain_error,
-        "_ans_srepr": ans_srepr,
+        "_result_srepr": result_srepr,
     }

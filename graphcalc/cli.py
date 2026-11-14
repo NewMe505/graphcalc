@@ -262,15 +262,15 @@ def _handle_calc_evaluate(handler):
                     rhs,
                     mode,
                     last_entry=_state(handler).ans(),
-                    variables=_state(handler).variables(),
-                    functions=_state(handler).functions(),
+                    variables=_state(handler).variable_entries(),
+                    functions=_state(handler).function_entries(),
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
                 return
-            result.pop("_ans_srepr", None)
+            result_srepr = result.pop("_result_srepr", None)
             if result["exact"] is not None:
-                _state(handler).set_variable(name, result["exact"])
+                _state(handler).set_variable(name, result["exact"], result_srepr)
             response = dict(result)
             response["expr"] = expr
             _send_json(handler, 200, response)
@@ -285,16 +285,16 @@ def _handle_calc_evaluate(handler):
                     rhs,
                     mode,
                     last_entry=_state(handler).ans(),
-                    variables=_state(handler).variables(),
-                    functions=_state(handler).functions(),
+                    variables=_state(handler).variable_entries(),
+                    functions=_state(handler).function_entries(),
                     symbols=params,
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
                 return
-            result.pop("_ans_srepr", None)
+            result_srepr = result.pop("_result_srepr", None)
             if result["exact"] is not None:
-                _state(handler).set_function(name, params, result["exact"])
+                _state(handler).set_function(name, params, result["exact"], result_srepr)
             response = dict(result)
             response["expr"] = expr
             if result["exact"] is not None:
@@ -307,13 +307,13 @@ def _handle_calc_evaluate(handler):
                 expr,
                 mode,
                 last_entry=_state(handler).ans(),
-                variables=_state(handler).variables(),
-                functions=_state(handler).functions(),
+                variables=_state(handler).variable_entries(),
+                functions=_state(handler).function_entries(),
             )
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})
             return
-        ans_srepr = result.pop("_ans_srepr", None)
+        ans_srepr = result.pop("_result_srepr", None)
         if result["domain_error"] is None:
             _history_store(handler).append(
                 {"expr": expr, "exact": result["exact"], "decimal": result["decimal"]}

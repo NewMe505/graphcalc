@@ -130,7 +130,41 @@
   require the resolved path to stay inside `STATIC_DIR.resolve()`. Unknown
   routes (e.g. `/server.py`) keep answering a JSON 404, never a 500.
 
+### Changed
+- State file format (P26): the on-disk state JSON gains two top-level maps,
+  `"variable_sreprs"` (name -> sympy `srepr()` string, or `null`) and
+  `"function_sreprs"` (name -> body's `srepr()` string, or `null`),
+  alongside the existing `"variables"` and `"functions"`; a stored "ans" is
+  now `{"exact": str, "srepr": str}` instead of a plain string. A state file
+  written before this change (or hand-edited) simply has `null`/absent
+  srepr(s) for every name and still loads cleanly -- see "Fixed" below for
+  why srepr exists at all. `CalcState.variables()`/`.functions()` (what
+  `GET /api/calc/vars` reads) are unchanged; the new srepr maps are only
+  ever read back through the new `variable_entries()`/`function_entries()`.
+
 ### Fixed
+- Bug #14 (P26): a stored "ans", variable, or function can no longer break
+  a later, unrelated evaluation. Before this fix, a stored value was always
+  rebuilt by plain `sympify()` of its exact-value string -- sympy's own full
+  namespace, not this calculator's restricted whitelist -- so a value built
+  from a name this calculator deliberately never whitelists (`"beta"`,
+  `"gamma"`, `"zeta"`, `"S"`, `"N"`, `"Q"`: each a real sympy
+  function/singleton, not just a free symbol, in sympy's own namespace)
+  could fail to rebuild; for "ans" specifically, that rebuild ran on *every*
+  evaluation regardless of whether the expression mentioned "ans" at all, so
+  `{"expr":"beta+1"}` followed by the unrelated `{"expr":"1+1"}` could
+  answer 400 instead of 200. Now: `{"expr":"a:=beta+1"}` or
+  `{"expr":"f(x):=beta(x)"}` followed by `{"expr":"1+1"}` always answers 200
+  `"2"`, and `{"expr":"ans"}` after `{"expr":"gamma"}`, `{"expr":"S"}`,
+  `{"expr":"N"}` or `{"expr":"Q"}` always answers 200 with that same exact
+  string back. Every stored variable's value and function's body is now
+  also persisted as its sympy `srepr()` (see "Changed" below), rebuilt from
+  that instead of a plain, ambiguous `sympify()` of the exact string
+  whenever one is available; and a stored name's value or body is only ever
+  rebuilt at all when an expression actually references that name, so an
+  unrebuildable definition (one with no srepr -- stored before this fix, or
+  loaded from a hand-edited file) can still only ever break a request that
+  uses it, never an unrelated one like `"1+1"`.
 - Bug #5 (P23): `POST /api/calc/evaluate` (and the `name:=expr`/
   `f(x):=expr` definition paths) now accept only this calculator's own
   grammar, via a new pre-parse gate, `graphcalc/grammar.py`. Before this

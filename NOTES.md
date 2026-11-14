@@ -4,6 +4,72 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P26 (2026-11-14, Bug #14 fix): `graphcalc/calc.py`, `graphcalc/state.py`,
+  `graphcalc/cli.py`, `tests/test_state_robustness.py`. Bug #14 was that a
+  stored "ans", variable, or function could break a *later, unrelated*
+  evaluation. Root cause: before this fix, a stored value was always rebuilt
+  by plain `sympify()` of its `exact`/"**"-notation string -- sympy's own
+  full namespace, not this calculator's restricted whitelist
+  (`graphcalc.calc._rad_names()`). A name this calculator deliberately never
+  whitelists -- `"beta"`, `"gamma"`, `"zeta"`, `"S"`, `"N"`, `"Q"` -- is a
+  real sympy function/singleton in that namespace, not just a free `Symbol`,
+  so re-`sympify()`-ing a stored value such as `"beta + 1"` raises
+  (`TypeError: unsupported operand type(s) for +: 'FunctionClass' and
+  'One'`); for "ans", that rebuild additionally ran *unconditionally* on
+  every `evaluate()` call (S1), so storing `"beta + 1"` as "ans" broke the
+  very next, unrelated `"1+1"`.
+  Fix, two parts: (1) storage format -- alongside the existing plain
+  `exact`/`body` string, `CalcState` now also persists that value's sympy
+  `srepr()`: "ans" gained a `{"exact": str, "srepr": str}` shape (replacing
+  the plain string history previously recalled "ans" from); variables and
+  functions gained parallel top-level `"variable_sreprs"` (name -> srepr or
+  `null`) and `"function_sreprs"` (name -> body srepr or `null`) maps
+  alongside the unchanged `"variables"`/`"functions"`. `srepr()`'s
+  `Symbol('beta')` is a quoted string literal constructor argument, never a
+  bare name `sympify()` could resolve against its own namespace, so
+  `sympify(srepr_string)` always reconstructs the *exact* original object
+  regardless of what the name would otherwise mean bare. A name stored
+  before this fix, or loaded from a hand-edited file, has `srepr=None` --
+  `calc._rebuild_stored_value`/`_function_locals` then fall back to the old
+  plain-`sympify()` rebuild for that one name, same as always. (2) laziness
+  -- `calc.evaluate` now only ever attempts to rebuild a stored "ans",
+  variable, or function (`calc._referenced_names`, generalizing S1's
+  single-name "ans" check to every stored name) when the expression
+  actually references that name as a whole token. A definition this
+  calculator cannot safely rebuild can therefore only ever break a request
+  that actually uses it; `"1+1"` is never affected by any stored "a", "f" or
+  "g", no matter how badly any of them is stored, or how unrebuildable an
+  "ans" is. A bare `"ans"` request is a true fixed point: it now reuses the
+  previous call's own `exact`/`srepr` verbatim instead of re-`str()`-ing a
+  freshly rebuilt object. `graphcalc.calc.evaluate`'s private
+  `"_result_srepr"` return key threads the freshly-computed `srepr()`
+  straight into `CalcState.set_ans`/`set_variable`/`set_function` for the
+  *next* call, without re-deriving it (ambiguously) from the plain `exact`
+  string; `graphcalc/cli.py` pops it from the response dict before sending
+  it, under that exact key name (an earlier attempt at this fix left
+  `cli.py` popping a stale `"_ans_srepr"` key from a prior rename in
+  `calc.py`, so `ans_srepr` was always `None` and every rebuild silently
+  fell back to the unsafe path -- worth remembering if this key gets
+  renamed again: grep every popper, not just the definer).
+  No plan drift: the plan step's file list named `graphcalc/evaluator.py`;
+  no such module exists in this repo, and none was created -- the logic it
+  describes (`evaluate()`, `parse_definition()`,
+  `parse_function_definition()`) lives in `graphcalc/calc.py`, confirmed by
+  direct reading, so that file is what changed instead.
+  One judgment call, recorded rather than left implicit: F2's acceptance
+  text (`"f(x):=beta(x)"` then `"1+1"` -> 200 `"2"`) does not require
+  `"f(x):=beta(x)"` to itself succeed, and this fix does not make it
+  succeed -- `"beta"` stays outside `graphcalc.calc._rad_names()`'s
+  whitelist, so `called_names` (P24/S3) still rejects calling it with 400
+  `"unknown function 'beta'"`, the same way it already rejects `"zeta(2)"`.
+  Widening that whitelist would itself be P24/S3 drift. What F2 needs, and
+  what `tests/test_state_robustness.py` checks, is that the failed attempt
+  stores nothing and leaves `"1+1"` unaffected; a function body that
+  references `"beta"` *without* calling it (`"g(x):=beta*x"`) stores fine
+  and exercises the same srepr-rebuild machinery, used to also prove the
+  reload case (a value/body missing its srepr -- an old-format or
+  hand-edited state file -- degrades to a 400 for *that* name only, never a
+  500, and never for an unrelated expression).
 - P25 (2026-11-05, decimal formatting): `graphcalc/numfmt.py`. Before this
   fix, `format_decimal` always rounded to 12 significant digits with
   `Decimal`'s context precision, then printed with `format(digits, "f")` --

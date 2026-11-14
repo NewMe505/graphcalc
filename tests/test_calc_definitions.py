@@ -374,9 +374,17 @@ def test_calc_state_round_trips_through_the_same_file(tmp_path):
     reloaded = CalcState(path)
     assert reloaded.variables() == {"a": "5"}
     assert reloaded.functions() == {}
+    # Plan step P26/S2 (Bug #14 fix) added "variable_sreprs"/"function_sreprs"
+    # alongside "variables"/"functions" on disk, so each stored value or
+    # function body can be rebuilt from its exact srepr rather than a plain,
+    # ambiguous sympify() of "exact"/"body" (see graphcalc.state.CalcState's
+    # module docstring). The public .variables()/.functions() shape above is
+    # unchanged; only the on-disk file gained these two extra top-level keys.
     assert json.loads((tmp_path / "state.json").read_text(encoding="utf-8")) == {
         "variables": {"a": "5"},
         "functions": {},
+        "variable_sreprs": {"a": None},
+        "function_sreprs": {},
     }
 
 

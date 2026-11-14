@@ -1,8 +1,189 @@
 # Notes
 
+- M2 Calculator errors, history, variables and tab UI merged by `scio build`: P5 passed, P6 passed, P7 failed, P7 passed, P8 failed, P8 passed; $17.0970.
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P26 (2026-11-14, Bug #14 fix): `graphcalc/calc.py`, `graphcalc/state.py`,
+  `graphcalc/cli.py`, `tests/test_state_robustness.py`. Bug #14 was that a
+  stored "ans", variable, or function could break a *later, unrelated*
+  evaluation. Root cause: before this fix, a stored value was always rebuilt
+  by plain `sympify()` of its `exact`/"**"-notation string -- sympy's own
+  full namespace, not this calculator's restricted whitelist
+  (`graphcalc.calc._rad_names()`). A name this calculator deliberately never
+  whitelists -- `"beta"`, `"gamma"`, `"zeta"`, `"S"`, `"N"`, `"Q"` -- is a
+  real sympy function/singleton in that namespace, not just a free `Symbol`,
+  so re-`sympify()`-ing a stored value such as `"beta + 1"` raises
+  (`TypeError: unsupported operand type(s) for +: 'FunctionClass' and
+  'One'`); for "ans", that rebuild additionally ran *unconditionally* on
+  every `evaluate()` call (S1), so storing `"beta + 1"` as "ans" broke the
+  very next, unrelated `"1+1"`.
+  Fix, two parts: (1) storage format -- alongside the existing plain
+  `exact`/`body` string, `CalcState` now also persists that value's sympy
+  `srepr()`: "ans" gained a `{"exact": str, "srepr": str}` shape (replacing
+  the plain string history previously recalled "ans" from); variables and
+  functions gained parallel top-level `"variable_sreprs"` (name -> srepr or
+  `null`) and `"function_sreprs"` (name -> body srepr or `null`) maps
+  alongside the unchanged `"variables"`/`"functions"`. `srepr()`'s
+  `Symbol('beta')` is a quoted string literal constructor argument, never a
+  bare name `sympify()` could resolve against its own namespace, so
+  `sympify(srepr_string)` always reconstructs the *exact* original object
+  regardless of what the name would otherwise mean bare. A name stored
+  before this fix, or loaded from a hand-edited file, has `srepr=None` --
+  `calc._rebuild_stored_value`/`_function_locals` then fall back to the old
+  plain-`sympify()` rebuild for that one name, same as always. (2) laziness
+  -- `calc.evaluate` now only ever attempts to rebuild a stored "ans",
+  variable, or function (`calc._referenced_names`, generalizing S1's
+  single-name "ans" check to every stored name) when the expression
+  actually references that name as a whole token. A definition this
+  calculator cannot safely rebuild can therefore only ever break a request
+  that actually uses it; `"1+1"` is never affected by any stored "a", "f" or
+  "g", no matter how badly any of them is stored, or how unrebuildable an
+  "ans" is. A bare `"ans"` request is a true fixed point: it now reuses the
+  previous call's own `exact`/`srepr` verbatim instead of re-`str()`-ing a
+  freshly rebuilt object. `graphcalc.calc.evaluate`'s private
+  `"_result_srepr"` return key threads the freshly-computed `srepr()`
+  straight into `CalcState.set_ans`/`set_variable`/`set_function` for the
+  *next* call, without re-deriving it (ambiguously) from the plain `exact`
+  string; `graphcalc/cli.py` pops it from the response dict before sending
+  it, under that exact key name (an earlier attempt at this fix left
+  `cli.py` popping a stale `"_ans_srepr"` key from a prior rename in
+  `calc.py`, so `ans_srepr` was always `None` and every rebuild silently
+  fell back to the unsafe path -- worth remembering if this key gets
+  renamed again: grep every popper, not just the definer).
+  No plan drift: the plan step's file list named `graphcalc/evaluator.py`;
+  no such module exists in this repo, and none was created -- the logic it
+  describes (`evaluate()`, `parse_definition()`,
+  `parse_function_definition()`) lives in `graphcalc/calc.py`, confirmed by
+  direct reading, so that file is what changed instead.
+  One judgment call, recorded rather than left implicit: F2's acceptance
+  text (`"f(x):=beta(x)"` then `"1+1"` -> 200 `"2"`) does not require
+  `"f(x):=beta(x)"` to itself succeed, and this fix does not make it
+  succeed -- `"beta"` stays outside `graphcalc.calc._rad_names()`'s
+  whitelist, so `called_names` (P24/S3) still rejects calling it with 400
+  `"unknown function 'beta'"`, the same way it already rejects `"zeta(2)"`.
+  Widening that whitelist would itself be P24/S3 drift. What F2 needs, and
+  what `tests/test_state_robustness.py` checks, is that the failed attempt
+  stores nothing and leaves `"1+1"` unaffected; a function body that
+  references `"beta"` *without* calling it (`"g(x):=beta*x"`) stores fine
+  and exercises the same srepr-rebuild machinery, used to also prove the
+  reload case (a value/body missing its srepr -- an old-format or
+  hand-edited state file -- degrades to a 400 for *that* name only, never a
+  500, and never for an unrelated expression).
+- P25 (2026-11-05, decimal formatting): `graphcalc/numfmt.py`. Before this
+  fix, `format_decimal` always rounded to 12 significant digits with
+  `Decimal`'s context precision, then printed with `format(digits, "f")` --
+  fixed-point only. Decimal's context rounding keeps the original exponent,
+  so a value needing more than 12 integer digits (e.g. `2**100`, 31 digits)
+  came back as the 12 rounded digits followed by the right number of
+  literal zeros (`"1267650600230000000000000000000"`-shaped), not a
+  12-significant-digit value -- and the existing "strip trailing zeros"
+  step never fired because a whole number has no `"."` in fixed-point text.
+  Fix: after rounding, check the rounded `Decimal`'s `adjusted()` (the
+  position of its leading digit); once that reaches `sig` (12), format with
+  `format(digits, "E")` instead, strip trailing zeros from the mantissa the
+  same way the fixed-point path already strips them, and rebuild as
+  `f"{mantissa}e{int(exponent)}"` -- `int()` on the exponent drops the `+`
+  and any leading zeros `Decimal`'s `"E"` format would otherwise print.
+  `2**100` -> decimal `"1.26765060023e30"`. The threshold is exactly `sig`
+  digits: a 12-digit integer (`10**11`) still prints fixed-point; a
+  13-digit one (`10**12`) already switches (`"1e12"`). Every magnitude
+  `format_decimal` already handled correctly (small fractions, exact
+  integers under 12 digits) is untouched -- the new branch only runs when
+  `adjusted() >= sig`. Added `tests/test_p25_scientific_notation.py`: the
+  F1 acceptance case over HTTP, plus unit tests on `format_decimal` directly
+  for the exact-12-digit/13-digit boundary, a negative large value, a
+  mantissa that must not pad out with trailing zeros, and a regression
+  check on the small-magnitude values from earlier steps. No plan drift, no
+  design question: formatting-only change, one function, no caller needed
+  updating.
+- P24 (2026-11-05, Bug #7 fix): `graphcalc/calc.py`, `graphcalc/grammar.py`.
+  Bug #7 was that `_TRANSFORMATIONS` used sympy's bundled
+  `implicit_multiplication_application`, whose first step, `split_symbols`,
+  breaks any identifier not already in `local_dict`/`global_dict` into one
+  symbol per letter and re-resolves each letter on its own -- so `"rate"`
+  evaluated to `"E*a*r*t"` (its `"e"` silently became the whitelisted
+  constant `E`), `"sec"` to `"E*c*s"`, `"deg"` to `"E*d*g"`, and
+  `"SIN(pi/2)"` (not a whitelisted name) to `"I*pi*N*S/2"` -- never the
+  single multi-letter name a TI-Nspire CAS user typed.
+  Fix (S1): `_TRANSFORMATIONS` now keeps only `implicit_multiplication`,
+  `implicit_application` and `function_exponentiation` from the bundle --
+  `split_symbols` is dropped entirely, so a run of letters/digits/
+  underscores (`graphcalc/grammar.py`'s own `_TOKEN_RE` IDENT group) always
+  parses as exactly one `Symbol`, mapped through `_rad_names()`/
+  `_deg_names()` when whitelisted, through `variables`/`functions`/a
+  function definition's own params when user-defined, and otherwise left
+  as a plain `Symbol(name)` -- `rate`, `xy`, `sec`, `deg` and `S`/`N`/`Q`
+  (real sympy singletons this calculator never whitelists) all come back
+  as themselves, with no stray `E`/`I`. Implied multiplication (`2x`,
+  `2pi`, `2sin(pi/6)`) and `e`/`E`/`I` as standalone names are unaffected,
+  since those come from `implicit_multiplication`/`implicit_application`
+  and `_rad_names()`, not `split_symbols`.
+  S3 closed a second hole the same root cause left open: without
+  `split_symbols`, an unknown name called with `"("` (`"SIN(pi/2)"`, or a
+  real sympy name this calculator never whitelisted, `"zeta(2)"`) would
+  otherwise fall to `parse_expr`'s own `auto_symbol` fallback, which wraps
+  it in a `Function` call that `implicit_multiplication`'s close-paren-
+  before-open-paren rule immediately downgrades back to a plain `Symbol`
+  times the argument list -- `"SIN(pi/2)"` silently becoming `"pi*SIN/2"`
+  instead of a 400. New `graphcalc/grammar.py::called_names(expr)` shares
+  `check_grammar`'s own tokenizer to return every identifier immediately
+  followed by `"("`; `calc.evaluate` now checks each one against the
+  completed `local_dict` and against `_GLOBAL_DICT` *before* calling
+  `parse_expr`, raising `CalcError("unknown function '<name>'")` (-> 400)
+  for anything in neither. New `tests/test_p24_names.py`, including
+  `test_p24_bare_names_no_constant` (S2: `sec`, `deg`, `S`, `N`, `Q` as
+  plain Symbols, plus `E`/`I` still resolving as constants on their own)
+  and the F1-F4 acceptance cases. No plan drift, no design question: the
+  fix is additive (drop one transformation, add one pre-parse check) and
+  every existing P5-P23 test (implied multiplication, `ans`, variables,
+  functions, the P23 grammar gate) kept passing unchanged.
+- P23 (2026-11-05, Bug #5 fix): `graphcalc/grammar.py`, new. Bug #5 was that
+  `graphcalc.calc.evaluate`'s sympy `parse_expr` call -- built on Python's
+  own tokenizer -- silently accepted a lot more than this calculator's
+  grammar. `check_grammar(expr)` now runs before every `parse_expr` call
+  (both the plain-expression and the `name:=expr`/`f(x):=expr` definition
+  paths in `graphcalc/cli.py`) and raises `grammar.GrammarError`, caught in
+  `calc.evaluate` and re-raised as the usual `CalcError` -> 400, never a 500.
+  The accepted grammar, spelled out for the next session:
+  - Numbers: digits, an optional decimal point with digits after it, an
+    optional `e`/`E` exponent -- exactly Python's float grammar. No hex
+    (`0x10`), no binary (`0b11`), no octal (`0o7`), no underscore digit
+    grouping (`1_000`), no imaginary suffix (`2j`, `3J`).
+  - Operators: `+ - * / ^ ** ( ) , !`. No comparison (`< > <= >= == !=`), no
+    `%`, no `//`, no bitwise/shift (`& | ~ << >>`). A bare `=` is let through
+    at the token level on purpose -- `parse_expr`'s own failure to parse two
+    bare `=` tokens is what rejects `"1 = = 2"`, and `"=="` is tokenized and
+    rejected as its own two-character token, so `"1==2"` is rejected here
+    instead.
+  - Postfix `!` (`5!` -> `120`, via sympy's `factorial_notation`), top-level
+    `name:=expr` definitions, and implied multiplication (`2x`, `2(x+1)`)
+    all stay allowed, exactly as before this fix.
+  - A call to one of the calculator's built-in one-argument functions
+    (`sqrt`, `sin`, `cos`, `tan`, `asin`, `acos`, `atan`, `ln`, `log`, `exp`,
+    `abs` -- `graphcalc.calc._rad_names()` minus the constants `pi`/`e`/`E`/`I`)
+    is rejected if it has more than one top-level, comma-separated argument
+    (`ln(e,2)`, `sqrt(4,2)`); a call to any other name (e.g. a user-defined
+    function `f(x,y):=...`) is left alone, since this grammar gate has no
+    way to know a user function's own arity and `calc.evaluate`'s existing
+    "wrong number of arguments" check already handles that case.
+  - Everything else the tokenizer doesn't recognize at all (`{`, `}`, `[`,
+    `]`, `@`, ...) is rejected too, so `"{1:2}"` and `"(1,2)"` both still
+    answer 400 (the latter via `parse_expr` itself refusing a bare tuple,
+    same as before this fix -- `check_grammar` lets a lone `,` through so a
+    function call's own argument separator keeps working).
+  Implemented across three steps: S1 added the tokenizer and the rejected
+  operator/literal groups; S2 added `test_grammar_literals_*`-named tests
+  pinning the six Python-only-literal inputs plus an implied-multiplication
+  guard for names starting with `j`/`J` (`2job`, `3Jane`); S3 added the
+  per-function arity count (`_has_top_level_comma`, depth-tracked past
+  nested parens) and the `test_grammar_arity_*`-named tests for `ln(e,2)`/
+  `sqrt(4,2)` plus a guard that `sqrt(4)` still answers exact `"2"`. See
+  `graphcalc/grammar.py`'s own module and function docstrings for the
+  tokenizer's ordering rules (why HEX/BIN/OCT must be tried before NUMBER,
+  why `:=`/`!=`/`==`/`//` must be tried before their shorter prefixes) and
+  `tests/test_evaluate_grammar.py`'s docstring for the full test-naming
+  rationale.
 - P8 (2026-10-31): Calculator tab UI, in `graphcalc/static/index.html` and
   `graphcalc/static/app.js` only, per the plan's file list. Added the six
   ids PRODUCT.md pins inside `tab-calculator`: `calc-input`, `calc-mode`

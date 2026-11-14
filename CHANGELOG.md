@@ -107,9 +107,105 @@
   Added `tests/test_calc_ui.py`, pinning both acceptance criteria: `GET /`
   contains the six `calc-*` ids, and `GET /static/app.js` mentions the three
   API paths.
+- `decimal` (and `complex`'s `real`/`imag`) now switch to scientific
+  notation once a value's magnitude needs more than 12 digits before the
+  decimal point (P25): `{"expr": "2^100"}` answers decimal
+  `"1.26765060023e30"` instead of the literal 31-digit integer rounded to
+  12 significant figures and padded out with 19 zeros. The threshold is
+  exact: a 12-digit integer (`10**11`) still prints fixed-point
+  (`"100000000000"`); a 13-digit one (`10**12`) already switches
+  (`"1e12"`). The scientific form keeps the same 12-significant-digit
+  precision and trailing-zero stripping as the fixed-point form, now
+  applied to the mantissa, with a lowercase `e`, no `+`, and no leading
+  zeros in the exponent; a negative value keeps its sign on the mantissa
+  (`-2^100` -> `"-1.26765060023e30"`). All in the one shared
+  `graphcalc/numfmt.py::format_decimal`, so every current and future
+  caller (today, `decimal` and `complex` in `graphcalc/calc.py`) gets the
+  same behavior for free. Smaller magnitudes are unaffected. Added
+  `tests/test_p25_scientific_notation.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
   byte, a backslash or an absolute segment in the decoded name outright, and
   require the resolved path to stay inside `STATIC_DIR.resolve()`. Unknown
   routes (e.g. `/server.py`) keep answering a JSON 404, never a 500.
+
+### Changed
+- State file format (P26): the on-disk state JSON gains two top-level maps,
+  `"variable_sreprs"` (name -> sympy `srepr()` string, or `null`) and
+  `"function_sreprs"` (name -> body's `srepr()` string, or `null`),
+  alongside the existing `"variables"` and `"functions"`; a stored "ans" is
+  now `{"exact": str, "srepr": str}` instead of a plain string. A state file
+  written before this change (or hand-edited) simply has `null`/absent
+  srepr(s) for every name and still loads cleanly -- see "Fixed" below for
+  why srepr exists at all. `CalcState.variables()`/`.functions()` (what
+  `GET /api/calc/vars` reads) are unchanged; the new srepr maps are only
+  ever read back through the new `variable_entries()`/`function_entries()`.
+
+### Fixed
+- Bug #14 (P26): a stored "ans", variable, or function can no longer break
+  a later, unrelated evaluation. Before this fix, a stored value was always
+  rebuilt by plain `sympify()` of its exact-value string -- sympy's own full
+  namespace, not this calculator's restricted whitelist -- so a value built
+  from a name this calculator deliberately never whitelists (`"beta"`,
+  `"gamma"`, `"zeta"`, `"S"`, `"N"`, `"Q"`: each a real sympy
+  function/singleton, not just a free symbol, in sympy's own namespace)
+  could fail to rebuild; for "ans" specifically, that rebuild ran on *every*
+  evaluation regardless of whether the expression mentioned "ans" at all, so
+  `{"expr":"beta+1"}` followed by the unrelated `{"expr":"1+1"}` could
+  answer 400 instead of 200. Now: `{"expr":"a:=beta+1"}` or
+  `{"expr":"f(x):=beta(x)"}` followed by `{"expr":"1+1"}` always answers 200
+  `"2"`, and `{"expr":"ans"}` after `{"expr":"gamma"}`, `{"expr":"S"}`,
+  `{"expr":"N"}` or `{"expr":"Q"}` always answers 200 with that same exact
+  string back. Every stored variable's value and function's body is now
+  also persisted as its sympy `srepr()` (see "Changed" below), rebuilt from
+  that instead of a plain, ambiguous `sympify()` of the exact string
+  whenever one is available; and a stored name's value or body is only ever
+  rebuilt at all when an expression actually references that name, so an
+  unrebuildable definition (one with no srepr -- stored before this fix, or
+  loaded from a hand-edited file) can still only ever break a request that
+  uses it, never an unrelated one like `"1+1"`.
+- Bug #5 (P23): `POST /api/calc/evaluate` (and the `name:=expr`/
+  `f(x):=expr` definition paths) now accept only this calculator's own
+  grammar, via a new pre-parse gate, `graphcalc/grammar.py`. Before this
+  fix, sympy's `parse_expr` -- built on Python's own tokenizer -- silently
+  accepted Python syntax outside the calculator's grammar. Every one of the
+  following now answers 400 with a JSON error instead of a Python-semantics
+  result: the comparison operators `< > <= >= == !=`, `%`, `//`, the
+  bitwise/shift operators `& | ~ << >>`; the Python-only numeric literals
+  `0x10`, `0b11`, `0o7`, `1_000`, `2j`, `3J`; and an extra argument to a
+  built-in one-argument function, e.g. `ln(e,2)` or `sqrt(4,2)` (sympy's own
+  two-argument `log(x, base)` previously let that through even though this
+  calculator's `ln`/`sqrt`/etc. are always one-argument). Postfix `!`
+  (`5!` -> `120`), top-level `name:=expr` definitions, implied
+  multiplication (`2x`, `2(x+1)`), and a multi-argument call to a
+  user-defined function all keep working exactly as before.
+- Bug #7 (P24): a multi-letter identifier is now always one name, as on the
+  TI-Nspire CAS, never split into letters. Before this fix,
+  `graphcalc/calc.py` built its parser on sympy's bundled
+  `implicit_multiplication_application`, whose `split_symbols` step broke
+  any name not already known into one symbol per letter and re-resolved
+  each letter against the whitelist on its own -- so `{"expr": "rate"}`
+  evaluated to exact `"E*a*r*t"` (its `"e"` silently became the constant
+  `E`), `{"expr": "sec"}` to `"E*c*s"`, `{"expr": "deg"}` to `"E*d*g"`, and
+  `{"expr": "SIN(pi/2)"}` to `"I*pi*N*S/2"`. `_TRANSFORMATIONS` now uses
+  `implicit_multiplication` + `implicit_application` +
+  `function_exponentiation` instead, with `split_symbols` dropped entirely:
+  a run of letters/digits/underscores -- the same token
+  `graphcalc/grammar.py`'s tokenizer already reads as one `IDENT` -- parses
+  as exactly one `Symbol` unless it is a whitelisted constant/function or a
+  stored variable/function. `{"expr": "rate"}` now answers exact `"rate"`
+  (decimal `null`), and `{"expr": "xy"}`, `{"expr": "sec"}`, `{"expr":
+  "deg"}` and `{"expr": "rate*2"}` each answer an exact with no stray `E`
+  or `I` anywhere in it. Calling a name this calculator doesn't whitelist
+  with `(...)`, including a wrongly-cased built-in (`{"expr":
+  "SIN(pi/2)"}`, versus the whitelisted lowercase `sin`) or a real sympy
+  name this calculator never whitelisted (`zeta(2)`), now answers 400
+  `{"error": "unknown function '<name>'"}` instead of silently falling
+  back to an implicit product between an unresolved symbol and the
+  argument list. Implied multiplication by a number (`"2x"` -> `"2*x"`,
+  `"2pi"` -> `"2*pi"`, `"2sin(pi/6)"` -> `"1"`) and `e`/`E`/`I` as
+  standalone names still resolve exactly as before. New
+  `graphcalc/grammar.py::called_names()`, sharing P23's tokenizer, finds
+  every name immediately followed by `"("` so `calc.evaluate` can check it
+  against its whitelist before `parse_expr` ever runs.

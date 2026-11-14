@@ -34,6 +34,7 @@ from sympy import (
     simplify,
     sin,
     sqrt,
+    srepr,
     sympify,
     tan,
     zoo,
@@ -48,7 +49,7 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
-from graphcalc.grammar import GrammarError, called_names, check_grammar
+from graphcalc.grammar import GrammarError, _tokenize, called_names, check_grammar
 from graphcalc.numfmt import format_decimal
 
 # Deliberately NOT sympy's bundled implicit_multiplication_application: that
@@ -233,6 +234,25 @@ _INFINITE_RESULTS = (zoo, oo, -oo)
 _UNDEFINED_ANS = Dummy("ans")
 
 
+def _references_ans(expr: str) -> bool:
+    """True if `expr` contains the identifier "ans" as a whole token.
+
+    Plan step P26/S1, Bug #14 fix: evaluate() only attempts to rebuild "ans"
+    (a possibly-failing step -- see `last_entry` below) when the expression
+    actually mentions it, so an expression that never uses "ans" can never
+    be broken by a stored ans that happens to be unsafe to rebuild.
+
+    Shares graphcalc.grammar's own tokenizer (the same one called_names()
+    and check_grammar() already use) so this matches token boundaries
+    exactly the way the rest of the grammar does: "2ans" (implicit
+    multiplication) counts as a reference, "answer" does not -- a plain
+    substring/regex check on `expr` would get the first case backwards (the
+    character before "ans" is the digit "2", not a letter, but "2" and
+    "ans" are still two separate tokens).
+    """
+    return any(group == "IDENT" and text == "ans" for group, text in _tokenize(expr))
+
+
 def evaluate(
     expr: str,
     mode: str = "rad",
@@ -255,15 +275,49 @@ def evaluate(
     and `domain_error` holds a message: "division by zero" for zoo/oo/-oo,
     "undefined" for nan.
 
-    `last_entry` is the history store's most recent successful entry (its
-    dict with an "exact" key), or None when the history is empty. The token
-    "ans" is bound to sympify(last_entry["exact"]) -- via local_dict, so it
-    is only ever matched as a whole identifier, never as a substring of
-    another name such as "answer". With no history, "ans" is instead bound
-    to a private sentinel so it still parses as one name rather than being
-    split into "a*n*s"; if that sentinel survives into the parsed
-    expression's free symbols, evaluate raises CalcError("ans is undefined")
-    instead of treating "ans" as a free variable.
+    `last_entry` is graphcalc.state.CalcState.ans() -- {"exact": str,
+    "srepr": str} for the last successful plain evaluation, or None when
+    there is none yet (plan step P26/S1, Bug #14 fix). _references_ans(expr)
+    decides, before anything else, whether `expr` mentions "ans" as a whole
+    token (never as a substring of another name such as "answer", and
+    always counting an implicit-multiplication use such as "2ans"); only
+    when it does is "ans" bound in local_dict at all, and the bind is the
+    only place a *stored* ans can fail to come back: sympify(last_entry
+    ["srepr"]) -- srepr(), not str() -- read back with plain sympify()'s own
+    full sympy namespace, never the restricted local_dict/global_dict a
+    user's own input parses with. That pairing matters: str() of a result
+    built from a name this calculator deliberately never whitelists, such as
+    "beta + 1" or "gamma", is ambiguous -- sympify()'s own namespace binds
+    bare "beta" to the real Euler Beta function, not back to the Symbol this
+    calculator actually meant -- and ambiguous enough that re-sympify()-ing
+    it can outright raise (Symbol + FunctionClass has no "+"). srepr()'s
+    "Symbol('beta')" has no such ambiguity: the name is a quoted string
+    literal argument to the Symbol(...) constructor, never a bare identifier
+    sympify() could resolve against its own namespace, so the rebuild always
+    reconstructs the exact original object regardless of what "beta",
+    "gamma", "zeta", "S", "N" or "Q" would otherwise mean bare. When `expr`
+    does not mention "ans" at all, none of this runs -- an unrelated
+    expression such as "1+1" can never be broken by a stored ans, safe to
+    rebuild or not. When it does mention "ans" but there is no last_entry
+    (or its "srepr" is missing), "ans" is instead bound to a private
+    sentinel so it still parses as one name rather than being split into
+    "a*n*s"; if that sentinel survives into the parsed expression's free
+    symbols, evaluate raises CalcError("ans is undefined") instead of
+    treating "ans" as a free variable. A plain "ans" request (expr.strip()
+    == "ans", nothing else) answers with the stored exact (and, internally,
+    srepr) string verbatim, never a freshly str()'d/srepr()'d
+    recomputation of the rebuilt object -- guarding against the (believed
+    impossible, but unproven) case that simplify() ever formats an
+    already-simplified object two different ways, and keeping repeated
+    "ans" recall a true fixed point.
+
+    The returned dict also carries a private "_ans_srepr" key -- srepr() of
+    this call's own result, or None when domain_error is set -- so
+    graphcalc.cli can thread it straight into CalcState.set_ans(exact,
+    srepr) for the *next* call's "ans" without re-deriving it (ambiguously)
+    from the plain `exact` string. It is not part of this function's
+    public, documented response shape: a caller that forwards this dict as
+    an HTTP response body must pop it first.
 
     `variables` is a name -> exact-value-string mapping (graphcalc.state's
     CalcState.variables(), typically) bound into local_dict the same way --
@@ -324,15 +378,18 @@ def evaluate(
     if variables:
         for name, value in variables.items():
             local_dict[name] = sympify(value)
+    stored_srepr = None
     try:
         if functions:
             local_dict.update(_function_locals(functions))
         if symbols:
             for name in symbols:
                 local_dict[name] = Symbol(name)
-        local_dict["ans"] = (
-            sympify(last_entry["exact"]) if last_entry is not None else _UNDEFINED_ANS
-        )
+        if _references_ans(expr):
+            stored_srepr = last_entry.get("srepr") if last_entry is not None else None
+            local_dict["ans"] = (
+                sympify(stored_srepr) if stored_srepr is not None else _UNDEFINED_ANS
+            )
         # A name called with "(" that is in neither local_dict (the rad/deg
         # whitelist, a stored variable or function, a function definition's
         # own param, "ans") nor _GLOBAL_DICT is unknown *and* undefined --
@@ -352,21 +409,32 @@ def evaluate(
         for name in called_names(expr):
             if name not in local_dict and name not in _GLOBAL_DICT:
                 raise CalcError(f"unknown function '{name}'")
-        parsed = parse_expr(
-            expr,
-            transformations=_TRANSFORMATIONS,
-            global_dict=_GLOBAL_DICT,
-            local_dict=local_dict,
-        )
-        if _UNDEFINED_ANS in parsed.free_symbols:
-            raise CalcError("ans is undefined")
-        result = simplify(parsed)
+        # A bare "ans" request (nothing else in `expr`) is a true fixed
+        # point: reuse the previous call's own `exact`/srepr verbatim
+        # instead of re-parsing/re-simplifying/re-str()-ing the rebuilt
+        # object (plan step P26/S1, Bug #14 fix) -- see the `last_entry`
+        # paragraph above for why a fresh str() could, in principle, ever
+        # disagree with the string that was actually returned before.
+        if expr.strip() == "ans" and stored_srepr is not None:
+            result = local_dict["ans"]
+            exact_override = last_entry["exact"]
+        else:
+            parsed = parse_expr(
+                expr,
+                transformations=_TRANSFORMATIONS,
+                global_dict=_GLOBAL_DICT,
+                local_dict=local_dict,
+            )
+            if _UNDEFINED_ANS in parsed.free_symbols:
+                raise CalcError("ans is undefined")
+            result = simplify(parsed)
+            exact_override = None
     except CalcError:
         raise
     except Exception as exc:
         raise CalcError(f"invalid expression: {expr}") from exc
 
-    exact = str(result)
+    exact = exact_override if exact_override is not None else str(result)
     decimal = None
     complex_value = None
     domain_error = None
@@ -390,10 +458,24 @@ def evaluate(
                 "imag": format_decimal(im_part),
             }
 
+    # "_ans_srepr": the srepr() this call's own result should be recalled
+    # by next time "ans" is used -- never derived from the plain `exact`
+    # string (see the big paragraph above for why that is ambiguous for a
+    # name such as "beta" or "gamma"). The fixed-point branch above reuses
+    # the previously-stored srepr verbatim, for the same reason it reuses
+    # `exact` verbatim. None on a domain error: a result with no value is
+    # never stored as "ans" (graphcalc.cli only calls CalcState.set_ans
+    # when domain_error is None). Private: graphcalc.cli must pop this key
+    # before forwarding the rest of this dict as an HTTP response body.
+    ans_srepr = None if domain_error is not None else (
+        stored_srepr if exact_override is not None else srepr(result)
+    )
+
     return {
         "expr": expr,
         "exact": exact,
         "decimal": decimal,
         "complex": complex_value,
         "domain_error": domain_error,
+        "_ans_srepr": ans_srepr,
     }

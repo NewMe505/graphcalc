@@ -155,11 +155,16 @@ def _handle_calc_history_get(handler):
 def _handle_calc_history_delete(handler):
     """DELETE /api/calc/history -> clears the store, then 200 {"history": []}.
 
-    After this, "ans" in a later /api/calc/evaluate has no last entry to
-    recall: calc.evaluate raises CalcError("ans is undefined"), which
+    Also clears the CalcState's stored "ans" (graphcalc.state.CalcState.
+    clear_ans) at the same time, since P26/S1 moved "ans" off the history
+    store and onto CalcState -- without this, a later /api/calc/evaluate
+    using "ans" would keep recalling the pre-delete answer forever. After
+    this, "ans" in a later /api/calc/evaluate has no last entry to recall:
+    calc.evaluate raises CalcError("ans is undefined"), which
     _handle_calc_evaluate turns into the usual 400, never a 500.
     """
     _history_store(handler).clear()
+    _state(handler).clear_ans()
     _send_json(handler, 200, {"history": []})
 
 
@@ -256,13 +261,14 @@ def _handle_calc_evaluate(handler):
                 result = calc.evaluate(
                     rhs,
                     mode,
-                    last_entry=_history_store(handler).last(),
+                    last_entry=_state(handler).ans(),
                     variables=_state(handler).variables(),
                     functions=_state(handler).functions(),
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
                 return
+            result.pop("_ans_srepr", None)
             if result["exact"] is not None:
                 _state(handler).set_variable(name, result["exact"])
             response = dict(result)
@@ -278,7 +284,7 @@ def _handle_calc_evaluate(handler):
                 result = calc.evaluate(
                     rhs,
                     mode,
-                    last_entry=_history_store(handler).last(),
+                    last_entry=_state(handler).ans(),
                     variables=_state(handler).variables(),
                     functions=_state(handler).functions(),
                     symbols=params,
@@ -286,6 +292,7 @@ def _handle_calc_evaluate(handler):
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
                 return
+            result.pop("_ans_srepr", None)
             if result["exact"] is not None:
                 _state(handler).set_function(name, params, result["exact"])
             response = dict(result)
@@ -299,17 +306,19 @@ def _handle_calc_evaluate(handler):
             result = calc.evaluate(
                 expr,
                 mode,
-                last_entry=_history_store(handler).last(),
+                last_entry=_state(handler).ans(),
                 variables=_state(handler).variables(),
                 functions=_state(handler).functions(),
             )
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})
             return
+        ans_srepr = result.pop("_ans_srepr", None)
         if result["domain_error"] is None:
             _history_store(handler).append(
                 {"expr": expr, "exact": result["exact"], "decimal": result["decimal"]}
             )
+            _state(handler).set_ans(result["exact"], ans_srepr)
         _send_json(handler, 200, result)
     except Exception as exc:  # catch-all: this endpoint must never answer with a 500
         _send_json(handler, 400, {"error": f"unexpected error: {exc}"})

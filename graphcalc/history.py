@@ -7,8 +7,9 @@ StateBackedHistoryStore (plan step P9/S1) is the disk-backed implementation:
 it holds no state of its own, deferring entirely to a graphcalc.state.
 CalcState's own "history" list, so history is written to the same JSON file
 as variables/functions/lists, through that CalcState's existing atomic
-_save. Wiring either store onto a server (--state vs. --in-memory) is a
-later step of this same feature, P9; graphcalc/cli.py does not change here.
+_save. graphcalc.cli.main()/serve() wire either store onto a server
+(StateBackedHistoryStore for --state, InMemoryHistoryStore for --in-memory)
+-- plan step P9/S2.
 """
 
 from abc import ABC, abstractmethod

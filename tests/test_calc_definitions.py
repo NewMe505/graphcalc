@@ -406,8 +406,10 @@ def test_calc_state_loads_old_file_missing_functions_key(tmp_path):
 def test_variable_survives_server_restart_on_same_state_file(tmp_path):
     """The variable still works after state is reloaded from disk: a new
     CalcState/server instance on the same state file, standing in for a
-    process restart with the same --state path (the CLI flag itself is a
-    later feature, P9)."""
+    process restart with the same --state path (see
+    tests/test_p9_state_persistence.py::test_p9_restart_persists_variable
+    for the same check through the real CLI subprocess, --state flag and
+    all)."""
     path = str(tmp_path / "state.json")
 
     srv1 = build_server(0, state=CalcState(path))

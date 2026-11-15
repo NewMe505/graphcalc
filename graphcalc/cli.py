@@ -29,7 +29,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
 from graphcalc import __version__
-from graphcalc.history import InMemoryHistoryStore
+from graphcalc.history import InMemoryHistoryStore, StateBackedHistoryStore
 from graphcalc.state import CalcState
 
 HEALTH_PATH = "/health"
@@ -431,8 +431,20 @@ def build_server(port, history_store=None, state=None):
 
 # Process lifecycle: the black-box acceptance tests run it against the started app;
 # the coverage floor counts in-process code only (M11).
-def serve(port):  # pragma: no cover
-    server = build_server(port)
+def serve(port, state_path=None):  # pragma: no cover
+    """Build the server and run it until interrupted.
+
+    `state_path` is the on-disk file to persist variables, functions,
+    history and lists to (plan step P9/S2) -- a CalcState(state_path) and a
+    StateBackedHistoryStore built on top of it are passed into build_server,
+    so a later process started with the same `state_path` picks up right
+    where this one left off. `state_path=None` (main()'s `--in-memory` run)
+    instead builds an unpathed CalcState() and a plain InMemoryHistoryStore,
+    so nothing here ever touches disk.
+    """
+    state = CalcState(state_path)
+    history_store = InMemoryHistoryStore() if state_path is None else StateBackedHistoryStore(state)
+    server = build_server(port, history_store=history_store, state=state)
     host, bound_port = server.server_address[0], server.server_address[1]
     print(f"serving on http://{host}:{bound_port}", flush=True)
     try:
@@ -449,6 +461,12 @@ def main(argv=None):
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     parser.add_argument("--port", type=int, default=None, help="start the HTTP server on this port")
     parser.add_argument(
+        "--state",
+        default="./graphcalc_state.json",
+        help="path to the JSON file variables, functions, history and lists are persisted to "
+        "(default: ./graphcalc_state.json)",
+    )
+    parser.add_argument(
         "--in-memory",
         action="store_true",
         help="keep variables, functions, lists and history in memory only",
@@ -458,6 +476,7 @@ def main(argv=None):
         print(f"graphcalc {__version__}")
         return 0
     if args.port is not None:  # pragma: no cover
-        return serve(args.port)
+        state_path = None if args.in_memory else args.state
+        return serve(args.port, state_path)
     parser.print_usage()
     return 2

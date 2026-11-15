@@ -45,9 +45,13 @@ Nothing in __init__ touches disk -- a load failure never triggers a write,
 so a corrupt file on disk is left exactly as it was found until the next
 actual change calls _save() and overwrites it with a valid one.
 
-There is no `--state` CLI flag yet, and no default on-disk path -- a caller
-must pass one explicitly; that wiring, plus POST /api/state/reset and the
-.gitignore entry, is a later step of the same feature (P9).
+`--state PATH` (default "./graphcalc_state.json") and `--in-memory` are
+wired up in graphcalc/cli.py's main()/serve() (plan step P9/S2): `--state`
+builds a CalcState on that path (and a StateBackedHistoryStore on top of
+it); `--in-memory` passes no path at all (and plugs in a plain
+InMemoryHistoryStore instead), so nothing touches disk. POST
+/api/state/reset and the .gitignore entry are still a later step of the
+same feature (P9).
 """
 
 import json

@@ -380,11 +380,17 @@ def test_calc_state_round_trips_through_the_same_file(tmp_path):
     # ambiguous sympify() of "exact"/"body" (see graphcalc.state.CalcState's
     # module docstring). The public .variables()/.functions() shape above is
     # unchanged; only the on-disk file gained these two extra top-level keys.
+    # Plan step P9/S1 unified history and lists into the same store, adding
+    # "history" (empty: nothing routed through this CalcState appends to it
+    # in this test) and "lists" (empty until a later feature, P15, adds
+    # CRUD) as two more top-level keys, present on every save from now on.
     assert json.loads((tmp_path / "state.json").read_text(encoding="utf-8")) == {
         "variables": {"a": "5"},
         "functions": {},
         "variable_sreprs": {"a": None},
         "function_sreprs": {},
+        "history": [],
+        "lists": {},
     }
 
 

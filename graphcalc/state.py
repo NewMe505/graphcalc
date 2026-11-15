@@ -1,13 +1,20 @@
-"""Persisted store for calculator variables, functions and "ans" (plan step
-P7/S1; "ans" added by P26/S1, Bug #14 fix; srepr-backed robust storage for
-variables and functions added by P26/S2, Bug #14 fix).
+"""Persisted store for calculator variables, functions, "ans", history and
+lists (plan step P7/S1; "ans" added by P26/S1, Bug #14 fix; srepr-backed
+robust storage for variables and functions added by P26/S2, Bug #14 fix;
+"history" and "lists" unified into this single store by plan step P9/S1).
 
 CalcState holds the dicts graphcalc.cli attaches to each HTTPServer instance:
 "variables" (name -> {"exact": str, "srepr": str | None}), "functions"
 (name -> {"params": [...], "body": str, "body_srepr": str | None}), the
 latter defaulting to {} so a state file written before functions existed
-still loads cleanly, and "ans" (the last plain evaluation's {"exact": str,
-"srepr": str}, or absent/None when there is none yet).
+still loads cleanly, "ans" (the last plain evaluation's {"exact": str,
+"srepr": str}, or absent/None when there is none yet), "history" (a plain
+list of the same {"expr", "exact", "decimal"} entries graphcalc.history.
+HistoryStore holds, oldest first -- see StateBackedHistoryStore in
+graphcalc/history.py, the HistoryStore implementation that reads and writes
+this list so a single JSON file backs both), and "lists" (name -> values,
+empty until a later feature, P15, adds CRUD for it -- kept here now so the
+on-disk shape, and POST /api/state/reset, do not have to change again then).
 
 "srepr" (and "body_srepr") is None for an entry stored by a version of this
 calculator before P26/S2, or loaded from a hand-edited file -- graphcalc.
@@ -27,14 +34,47 @@ through atomically (a temp file in the same directory, then os.replace)
 after every change, so a new CalcState built later on the same path picks
 up where the previous one left off.
 
+Loading is never allowed to raise (plan step P9/S1, Bug #14 fix): a missing
+file leaves every field at its empty default (unchanged from before); a
+file that exists but fails to parse as JSON, or whose top level is not a
+JSON object, is treated the same as an empty "{}"; and any individual field
+of the wrong JSON type (e.g. "variables" stored as a string or a list
+instead of an object) falls back to that field's own empty default via
+_coerce_dict/_coerce_list below, rather than raising while reading it.
+Nothing in __init__ touches disk -- a load failure never triggers a write,
+so a corrupt file on disk is left exactly as it was found until the next
+actual change calls _save() and overwrites it with a valid one.
+
 There is no `--state` CLI flag yet, and no default on-disk path -- a caller
-must pass one explicitly. That wiring, together with lists and history,
-belongs to a later feature (P9, disk-backed state for the whole product).
+must pass one explicitly; that wiring, plus POST /api/state/reset and the
+.gitignore entry, is a later step of the same feature (P9).
 """
 
 import json
 import os
 import tempfile
+
+
+def _coerce_dict(value) -> dict:
+    """Return a fresh dict copy of `value`, or {} if it is not a dict.
+
+    Used for every dict-shaped field read back from a loaded state file
+    (plan step P9/S1, Bug #14 fix) so a wrong-shape value for just one key
+    (e.g. "variables" hand-edited into a string or a list) falls back to
+    that key's own empty default instead of raising -- dict() of a
+    non-mapping, non-pairs value (e.g. dict("oops")) can itself raise,
+    which this guards against.
+    """
+    return dict(value) if isinstance(value, dict) else {}
+
+
+def _coerce_list(value) -> list:
+    """Return a fresh list copy of `value`, or [] if it is not a list.
+
+    The list-shaped counterpart to _coerce_dict above, used for "history"
+    (plan step P9/S1).
+    """
+    return list(value) if isinstance(value, list) else []
 
 
 def _is_valid_ans(value) -> bool:
@@ -62,19 +102,39 @@ class CalcState:
             "functions": {},
             "variable_sreprs": {},
             "function_sreprs": {},
+            "history": [],
+            "lists": {},
         }
         if path is not None and os.path.exists(path):
-            with open(path, encoding="utf-8") as fh:
-                loaded = json.load(fh)
-            self._data["variables"] = dict(loaded.get("variables", {}))
-            self._data["functions"] = dict(loaded.get("functions", {}))
+            loaded = {}
+            try:
+                with open(path, encoding="utf-8") as fh:
+                    loaded = json.load(fh)
+            except (OSError, ValueError):
+                # Missing-by-the-time-we-open-it, unreadable, or not valid
+                # JSON at all (json.JSONDecodeError is a ValueError) -- an
+                # empty "{}" below, same as a state file that simply does
+                # not exist yet (plan step P9/S1, Bug #14 fix).
+                loaded = {}
+            if not isinstance(loaded, dict):
+                # Valid JSON, but the top level is not an object (e.g. a
+                # hand-edited file holding a bare list or string) -- same
+                # fallback as above (plan step P9/S1, Bug #14 fix).
+                loaded = {}
+            self._data["variables"] = _coerce_dict(loaded.get("variables"))
+            self._data["functions"] = _coerce_dict(loaded.get("functions"))
             # Absent for a state file written before P26/S2 (or a hand-edited
             # one) -- every name then simply has no srepr, the same as a
             # name stored this session with srepr=None (see set_variable/
             # set_function below), so variable_entries()/function_entries()
             # fall back to the pre-P26/S2 plain-exact rebuild for it.
-            self._data["variable_sreprs"] = dict(loaded.get("variable_sreprs", {}))
-            self._data["function_sreprs"] = dict(loaded.get("function_sreprs", {}))
+            self._data["variable_sreprs"] = _coerce_dict(loaded.get("variable_sreprs"))
+            self._data["function_sreprs"] = _coerce_dict(loaded.get("function_sreprs"))
+            # Absent for a state file written before P9/S1 -- every name
+            # then simply has no history/lists yet, the same defaulting
+            # pattern as variable_sreprs/function_sreprs above.
+            self._data["history"] = _coerce_list(loaded.get("history"))
+            self._data["lists"] = _coerce_dict(loaded.get("lists"))
             stored_ans = loaded.get("ans")
             if _is_valid_ans(stored_ans):
                 self._data["ans"] = dict(stored_ans)
@@ -202,6 +262,64 @@ class CalcState:
         /api/calc/history) so "ans" goes back to undefined at the same
         time the history it was recalling from does.
         """
+        self._data.pop("ans", None)
+        self._save()
+
+    def history(self) -> list:
+        """Return a fresh copy of the evaluation history, oldest entry first
+        (plan step P9/S1).
+
+        Each entry is a fresh dict too, so mutating the result never affects
+        the store -- the same contract graphcalc.history.HistoryStore.
+        entries() documents. graphcalc.history.StateBackedHistoryStore reads
+        this to implement that interface on top of CalcState, so history
+        lives in the same JSON file as variables/functions/lists.
+        """
+        return [dict(entry) for entry in self._data["history"]]
+
+    def append_history(self, entry: dict) -> None:
+        """Append a fresh copy of `entry` to the history, then save to disk
+        if a path is set (plan step P9/S1).
+        """
+        self._data["history"].append(dict(entry))
+        self._save()
+
+    def clear_history(self) -> None:
+        """Remove every history entry, then save to disk if a path is set
+        (plan step P9/S1).
+
+        Called by graphcalc.history.StateBackedHistoryStore.clear(), the
+        same way DELETE /api/calc/history already clears an
+        InMemoryHistoryStore -- and, same as before, left to the caller to
+        pair with clear_ans() if "ans" should also go back to undefined.
+        """
+        self._data["history"] = []
+        self._save()
+
+    def lists(self) -> dict:
+        """Return a fresh copy of the named-lists store (plan step P9/S1).
+
+        Empty until a later feature (P15) adds CRUD for named lists; kept
+        here now, and included in reset() below, so the on-disk shape (and
+        POST /api/state/reset) will not need to change again then.
+        """
+        return dict(self._data["lists"])
+
+    def reset(self) -> None:
+        """Empty variables, functions, lists, history and ans in one go,
+        then save to disk once (plan step P9/S1).
+
+        Backs POST /api/state/reset (CLI/route wiring is a later step of
+        this same feature, P9): a single _save() call here, rather than one
+        per field, so a reset is one atomic write, never a sequence of
+        partial ones.
+        """
+        self._data["variables"] = {}
+        self._data["functions"] = {}
+        self._data["variable_sreprs"] = {}
+        self._data["function_sreprs"] = {}
+        self._data["lists"] = {}
+        self._data["history"] = []
         self._data.pop("ans", None)
         self._save()
 

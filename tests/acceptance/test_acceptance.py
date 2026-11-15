@@ -41,3 +41,32 @@ def test_p29_longest_run_http(app_url):
         status, body = _post_evaluate(app_url, expr)
         assert status == 400, f"{expr!r} -> status {status}, body {body}"
         assert isinstance(body.get("error"), str), f"{expr!r} -> body {body}"
+
+
+# ---- P29/S2: '.5' and '5.' accepted, as on a TI (owner revision,
+# 2026-11-14/2026-11-15) ----
+
+
+def test_p29_accept_http(app_url):
+    status, body = _post_evaluate(app_url, ".5")
+    assert status == 200, f".5 -> status {status}, body {body}"
+    assert body["decimal"] == "0.5"
+
+    status, body = _post_evaluate(app_url, "5.")
+    assert status == 200, f"5. -> status {status}, body {body}"
+    assert body["decimal"] == "5"
+
+    status, body = _post_evaluate(app_url, "0005")
+    assert status == 200, f"0005 -> status {status}, body {body}"
+    assert body["exact"] == "5"
+
+    # Mixed cases: implied and explicit multiplication must still work with
+    # the newly-accepted leading-dot shape, never misread as a malformed
+    # number.
+    status, body = _post_evaluate(app_url, "2*.5")
+    assert status == 200, f"2*.5 -> status {status}, body {body}"
+    assert body["decimal"] == "1"
+
+    status, body = _post_evaluate(app_url, ".5x")
+    assert status == 200, f".5x -> status {status}, body {body}"
+    assert body["exact"] == "0.5*x"

@@ -49,7 +49,13 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
-from graphcalc.grammar import GrammarError, _tokenize, called_names, check_grammar
+from graphcalc.grammar import (
+    GrammarError,
+    _tokenize,
+    called_names,
+    check_grammar,
+    normalize_numbers,
+)
 from graphcalc.limits import is_power_too_large
 from graphcalc.numfmt import format_decimal
 
@@ -496,6 +502,20 @@ def evaluate(
         check_grammar(expr)
     except GrammarError as exc:
         raise CalcError(str(exc)) from exc
+    # Rewrite every NUMBER token check_grammar just approved into
+    # Python-safe text (plan step P29/S2, owner revision 2026-11-14):
+    # ".5"/"5."/"0005" are all grammar-accepted literals, as on a TI, but
+    # Python's own tokenizer -- what sympy's parse_expr and
+    # is_power_too_large's own second parse are both built on -- raises a
+    # plain SyntaxError on the leading-zero shape ("0005") specifically.
+    # Reassigning `expr` here (not just a local copy threaded into
+    # parse_expr alone) means every one of this function's remaining
+    # `expr`-text-based steps -- is_power_too_large just below,
+    # _referenced_names/called_names further down, the bare-"ans" fast
+    # path, and the response's own "expr" echo -- all agree on the same,
+    # Python-safe text, instead of the real parse seeing normalized digits
+    # while an earlier guard saw the original, un-normalized ones.
+    expr = normalize_numbers(expr)
 
     # Power-size guard (plan step P28/S1, Bug #20 fix): checked before any
     # of the real parsing below, including the "bare ans" fast path above

@@ -18,6 +18,31 @@ page (no build step, no CDN or other external resources) with four tabs:
 Calculator, Graphs, Lists & Statistics, and CAS. The page only draws what the
 JSON API returns.
 
+By default (no `--in-memory`), variables, functions, lists and history are
+held in memory and written through atomically to a JSON file at `--state
+PATH` (default `./graphcalc_state.json`, next to the current directory --
+pass an absolute path to pin it elsewhere), which is loaded again on
+startup -- `python -m graphcalc --port 8000` then `python -m graphcalc
+--port 8000` again (same `--state` path, the default) picks up right where
+the previous run left off: a variable defined with `"a:=5"` evaluates to
+`"5"` after the restart. The file is rewritten (temp file in the same
+directory, then an atomic rename) after every change, so it is always valid
+JSON, even if the process is killed mid-write. `--in-memory` disables all
+of this: nothing is read or written on disk, and nothing in `--state` has
+any effect. A state file that is missing, corrupt, or holds the wrong JSON
+shape is never fatal -- the server starts with empty defaults for whichever
+fields are unreadable instead of failing to start.
+
+`POST /api/state/reset` -- empties variables, functions, lists and history
+(and forgets `ans`) in one call, answering 200 `{"status": "reset"}`; with
+`--state` this is a single atomic write, and with `--in-memory` it touches
+no file at all.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/state/reset
+# {"status": "reset"}
+```
+
 The UI shell is served from two routes:
 - `GET /` -- `text/html`, the tab page (`tab-calculator`, `tab-graphs`,
   `tab-lists`, `tab-cas`, and a `graph-canvas` canvas on the Graphs tab).

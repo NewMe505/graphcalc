@@ -14,11 +14,19 @@ _handle_calc_history_delete).
 
 A "name:=expr" input (graphcalc.calc.parse_definition) is detected before
 the normal evaluate path and stores the result in a graphcalc.state.CalcState
-held on the HTTPServer instance (see build_server and _state) -- separate
-from the history store (history and state are not yet unified behind one
-object; that is a later feature, P9), but a successful definition is added
-to both. GET /api/calc/vars reads that same CalcState back as JSON (see
-_handle_calc_vars_get).
+held on the HTTPServer instance (see build_server and _state), but a
+successful definition is added to both. GET /api/calc/vars reads that same
+CalcState back as JSON (see _handle_calc_vars_get).
+
+Disk persistence (plan step P9): main()'s `--state PATH` (default
+"./graphcalc_state.json") builds a CalcState on that path plus a
+graphcalc.history.StateBackedHistoryStore on top of it, so history now lives
+in the same JSON file as variables/functions/lists -- the "separate objects"
+split described above is only about the in-process API (CalcState vs.
+HistoryStore), not the on-disk shape, which P9 unified. `--in-memory` passes
+no path to CalcState and plugs in a plain InMemoryHistoryStore instead, so
+nothing ever touches disk (see serve()). POST /api/state/reset
+(_handle_state_reset) empties both in one call.
 """
 
 import argparse

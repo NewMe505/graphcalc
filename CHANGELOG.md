@@ -166,6 +166,32 @@
   unaffected, since it is only ever set from a plain evaluation (P26/S1,
   P30), never a definition's right-hand side. Added
   `tests/test_p32_definitions_in_history.py`.
+- Disk-persisted state (P9): variables, functions, lists (an empty `{}` for
+  now -- P15 adds CRUD for named lists) and history are held in memory and
+  written through atomically to a JSON file at `--state PATH` (default
+  `./graphcalc_state.json`), which is loaded again on startup -- after
+  `{"expr": "a:=5"}` with `--state S`, restarting the server with the same
+  `--state S` and evaluating `{"expr": "a"}` answers exact `"5"`. Each write
+  is a temp file in the state file's own directory followed by an atomic
+  `os.replace`, so the file parses as valid JSON after every change, even if
+  the process is killed mid-write. `--in-memory` disables all of this: no
+  file is ever read or written, and `--state` has no effect. New `POST
+  /api/state/reset` empties variables, functions, lists and history (and
+  forgets `ans`) in one call, answering 200 `{"status": "reset"}` -- one
+  atomic write with `--state`, no file at all with `--in-memory`. History
+  moved behind a new `graphcalc.history.StateBackedHistoryStore`, so one
+  JSON file now backs both variables/functions and history; `--in-memory`
+  still uses the existing plain `InMemoryHistoryStore`. Bug #14 (load-time):
+  a state file that is missing, unreadable, not valid JSON, or has the
+  wrong JSON shape at the top level or for any individual field (e.g.
+  `"variables"` hand-edited into a string) never raises on load -- the
+  affected field(s) simply fall back to their empty default, so a corrupt
+  state file can never break evaluation; a load failure also never writes,
+  so the corrupt file is left alone until the next real change overwrites
+  it with a valid one. `.gitignore` now lists `graphcalc_state.json`. Added
+  `graphcalc/state.py`'s file I/O (`CalcState`), `graphcalc.history.
+  StateBackedHistoryStore`, and `tests/test_p9_state_persistence.py`
+  (restarts a real server subprocess on the same `--state` path).
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

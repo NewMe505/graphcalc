@@ -50,8 +50,10 @@ wired up in graphcalc/cli.py's main()/serve() (plan step P9/S2): `--state`
 builds a CalcState on that path (and a StateBackedHistoryStore on top of
 it); `--in-memory` passes no path at all (and plugs in a plain
 InMemoryHistoryStore instead), so nothing touches disk. POST
-/api/state/reset and the .gitignore entry are still a later step of the
-same feature (P9).
+/api/state/reset (graphcalc/cli.py's _handle_state_reset, plan step P9/S3)
+calls reset() below for exactly this one-atomic-write guarantee, then also
+clears the history store. The repository's .gitignore lists
+graphcalc_state.json so a developer's local state file is never committed.
 """
 
 import json

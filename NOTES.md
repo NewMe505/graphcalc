@@ -1,5 +1,6 @@
 # Notes
 
+- M5 Number literals, decimal exacts, history and wrapping merged by `scio build`: P29 passed, P33 passed, P31 passed, P32 passed; $9.3290.
 - M4 Evaluator hardening: names, Unicode, freezes, literals merged by `scio build`: P27 failed, P27 passed, P28 passed, P29 skipped (reopened by the owner's 2026-11-15 revision and fixed in M5 -- see the P29/S1 and P29/S2 notes below), P30 passed; $13.4294.
 - M3 Evaluator grammar, naming and robustness fixes merged by `scio build`: P23 passed, P24 passed, P25 passed, P26 failed, P26 failed, P26 failed, P26 passed; $30.6874.
 - M2 Calculator errors, history, variables and tab UI merged by `scio build`: P5 passed, P6 passed, P7 failed, P7 passed, P8 failed, P8 passed; $17.0970.

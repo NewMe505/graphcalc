@@ -67,6 +67,22 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/26",
       "merged_commit": "15544d50b0953ac7c3089d5c1f6d7fa2a22451cc",
       "usd": 13.4294
+    },
+    {
+      "id": "M5",
+      "title": "Number literals, decimal exacts, history and wrapping",
+      "status": "done",
+      "branch": "milestone/5",
+      "features": [
+        "P29",
+        "P31",
+        "P32",
+        "P33"
+      ],
+      "pr_number": 31,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/31",
+      "merged_commit": "3785c187155dca9db3550fcc107d70545374172d",
+      "usd": 9.329
     }
   ],
   "features": [
@@ -353,12 +369,12 @@
     {
       "id": "P29",
       "description": "Owner revision (2026-11-14): .5 and 5. accepted, as on a TI.",
-      "status": "skipped",
-      "commit": null,
-      "thread": "build-graphcalc-m4-p29-a1",
-      "tier": "T0",
+      "status": "done",
+      "commit": "00ec9e28ea95253da5f0c485b74cc14691be15e3",
+      "thread": "build-graphcalc-m4-p29-a2",
+      "tier": "T1",
       "issue": 24,
-      "usd": 0.634
+      "usd": 4.5667
     },
     {
       "id": "P30",
@@ -373,33 +389,33 @@
     {
       "id": "P31",
       "description": "Owner revision (2026-11-14): clean exact for decimals.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "265e865a08c731de5cf75066b54f75de12d62692",
+      "thread": "build-graphcalc-m4-p31-a1",
+      "tier": "T1",
+      "issue": 28,
+      "usd": 1.7826
     },
     {
       "id": "P32",
       "description": "Owner revision (2026-11-14): definitions in history.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "799fb1f3a9cf8e287a7d55023f6b26f51fd6493c",
+      "thread": "build-graphcalc-m4-p32-a1",
+      "tier": "T0",
+      "issue": 29,
+      "usd": 1.7276
     },
     {
       "id": "P33",
       "description": "Bug #27 fix: a long result, value or error message never widens the page; long text wraps inside its own line on every tab.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "4e2b10a29d249e168c915fc3608dca103c2f45ac",
+      "thread": "build-graphcalc-m4-p33-a1",
+      "tier": "T0",
+      "issue": 30,
+      "usd": 1.2521
     }
   ],
-  "updated": "2026-11-15T03:54:02+00:00"
+  "updated": "2026-11-15T20:57:38+00:00"
 }

@@ -2,7 +2,7 @@
   "product": "graphcalc",
   "stack": "python",
   "bootstrap_commit": "b7253fb5ca7cd5f4699753269aa3ded0ee4e43bd",
-  "build_thread": "build-graphcalc-m3",
+  "build_thread": "build-graphcalc-m4",
   "milestones": [
     {
       "id": "M1",
@@ -51,6 +51,22 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/19",
       "merged_commit": "f1d5404bb7f5b9120fc62ed10515af0bffc63ee3",
       "usd": 30.6874
+    },
+    {
+      "id": "M4",
+      "title": "Evaluator hardening: names, Unicode, freezes, literals",
+      "status": "done",
+      "branch": "milestone/4",
+      "features": [
+        "P27",
+        "P28",
+        "P29",
+        "P30"
+      ],
+      "pr_number": 26,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/26",
+      "merged_commit": "15544d50b0953ac7c3089d5c1f6d7fa2a22451cc",
+      "usd": 13.4294
     }
   ],
   "features": [
@@ -317,42 +333,42 @@
     {
       "id": "P27",
       "description": "Bug #21 fix: evaluate accepts only the calculator's own function names and ASCII digits and letters; sympy's internal constructors are never callable, and a Unicode digit, letter or superscript answers 400.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "bfc05f8c4da43810709d51764e7deb82df2cb893",
+      "thread": "build-graphcalc-m4-p27-a2",
+      "tier": "T1",
+      "issue": 22,
+      "usd": 4.2101
     },
     {
       "id": "P28",
       "description": "Bug #20 fix: no input can freeze the calculator; a result too large to compute answers quickly with an error, and the next request is still answered.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "cceee00e46b5c6884c49639a593c846971e10660",
+      "thread": "build-graphcalc-m4-p28-a1",
+      "tier": "T1",
+      "issue": 23,
+      "usd": 5.5789
     },
     {
       "id": "P29",
       "description": "Owner revision (2026-11-14): .5 and 5. accepted, as on a TI.",
-      "status": "todo",
+      "status": "skipped",
       "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "thread": "build-graphcalc-m4-p29-a1",
+      "tier": "T0",
+      "issue": 24,
+      "usd": 0.634
     },
     {
       "id": "P30",
       "description": "Owner revision (2026-11-14): ans:=5 refused.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "7eac1e09208e9d203d2254d432ebe420408fb285",
+      "thread": "build-graphcalc-m4-p30-a1",
+      "tier": "T0",
+      "issue": 25,
+      "usd": 1.6169
     },
     {
       "id": "P31",
@@ -373,7 +389,17 @@
       "tier": null,
       "issue": null,
       "usd": 0.0
+    },
+    {
+      "id": "P33",
+      "description": "Bug #27 fix: a long result, value or error message never widens the page; long text wraps inside its own line on every tab.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
     }
   ],
-  "updated": "2026-11-14T21:31:53+00:00"
+  "updated": "2026-11-15T03:54:02+00:00"
 }

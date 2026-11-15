@@ -1,5 +1,6 @@
 # Notes
 
+- M4 Evaluator hardening: names, Unicode, freezes, literals merged by `scio build`: P27 failed, P27 passed, P28 passed, P29 skipped, P30 passed; $13.4294.
 - M3 Evaluator grammar, naming and robustness fixes merged by `scio build`: P23 passed, P24 passed, P25 passed, P26 failed, P26 failed, P26 failed, P26 passed; $30.6874.
 - M2 Calculator errors, history, variables and tab UI merged by `scio build`: P5 passed, P6 passed, P7 failed, P7 passed, P8 failed, P8 passed; $17.0970.
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.

@@ -4,18 +4,21 @@ Serves JSON at /health and the plain HTML/CSS/JS page (and its /static/<name>
 assets) that the browser-facing tabs are built on; see Handler.do_GET. The
 math API lives under /api/calc/... -- see Handler.do_POST and
 _handle_calc_evaluate for POST /api/calc/evaluate, which defers the actual
-parsing and evaluation to graphcalc.calc. Every successful evaluation is
-appended to a graphcalc.history.HistoryStore held on the HTTPServer instance
-(see build_server and _history_store); GET /api/calc/history reads it back,
-and DELETE /api/calc/history clears it (see Handler.do_DELETE and
+parsing and evaluation to graphcalc.calc. Every successful evaluation --
+including a successful "name:=expr" or "f(x):=expr" definition (plan step
+P32, owner revision 2026-11-14) -- is appended to a graphcalc.history.
+HistoryStore held on the HTTPServer instance (see build_server and
+_history_store); GET /api/calc/history reads it back, and DELETE
+/api/calc/history clears it (see Handler.do_DELETE and
 _handle_calc_history_delete).
 
 A "name:=expr" input (graphcalc.calc.parse_definition) is detected before
 the normal evaluate path and stores the result in a graphcalc.state.CalcState
-held on the HTTPServer instance (see build_server and _state), separate from
-the history store -- history and state are not yet unified behind one
-object; that is a later feature (P9). GET /api/calc/vars reads that same
-CalcState back as JSON (see _handle_calc_vars_get).
+held on the HTTPServer instance (see build_server and _state) -- separate
+from the history store (history and state are not yet unified behind one
+object; that is a later feature, P9), but a successful definition is added
+to both. GET /api/calc/vars reads that same CalcState back as JSON (see
+_handle_calc_vars_get).
 """
 
 import argparse
@@ -212,8 +215,18 @@ def _handle_calc_evaluate(handler):
     functions), and -- only when that evaluation has no domain_error -- the
     result's exact value is stored under name in the HTTPServer's CalcState.
     The response is calc.evaluate's own dict with "expr" replaced by the
-    original "name:=expr" text. A definition is not added to the history
-    store; "ans" only ever recalls a plain evaluation's result.
+    original "name:=expr" text. "ans" only ever recalls a plain evaluation's
+    result (P26/S1, P30), never a definition's right-hand side -- that is
+    unchanged by the below. A successful definition (no domain_error on the
+    right-hand side) is, however, appended to the history store too (plan
+    step P32, owner revision 2026-11-14: "definitions in history"), as
+    {"expr": <original "name:=expr" text>, "exact": ..., "decimal": ...} --
+    `exact` and `decimal` are read back off the same `response` dict this
+    handler is about to send, so the history entry always matches what the
+    client actually saw. A rejected definition (check_not_constant's 400, or
+    a domain_error on the right-hand side such as "a:=1/0") returns before
+    this append ever runs, so it adds nothing -- the same rule a plain
+    evaluate() failure already followed.
 
     calc.parse_function_definition checks for "f(x):=expr" (or "f(x,y):=
     expr") the same way (plan step P7/S2): names.check_not_constant(name)
@@ -224,7 +237,10 @@ def _handle_calc_evaluate(handler):
     stored under name in CalcState, and the response's "exact" is the body
     rendered in caret form via calc.to_caret (e.g. "x^2 + 1") -- the one
     place that conversion happens; the stored body itself stays in plain
-    "**" form so it stays directly re-sympify()-able. A later plain
+    "**" form so it stays directly re-sympify()-able. The history entry
+    added for a successful function definition (plan step P32, same rule as
+    above) uses this already-caret-converted `response["exact"]`, so it
+    reads "x^2 + 1" too, never the stored "**" form. A later plain
     evaluate() call such as "f(3)" sees every stored function through
     `functions=_state(handler).functions()` below, which rebuilds it as a
     sympy Lambda; calling it with the wrong number of arguments is a 400,
@@ -286,6 +302,10 @@ def _handle_calc_evaluate(handler):
                 _state(handler).set_variable(name, result["exact"], result_srepr)
             response = dict(result)
             response["expr"] = expr
+            if result["exact"] is not None:
+                _history_store(handler).append(
+                    {"expr": expr, "exact": response["exact"], "decimal": response["decimal"]}
+                )
             _send_json(handler, 200, response)
             return
 
@@ -312,6 +332,9 @@ def _handle_calc_evaluate(handler):
             response["expr"] = expr
             if result["exact"] is not None:
                 response["exact"] = calc.to_caret(result["exact"])
+                _history_store(handler).append(
+                    {"expr": expr, "exact": response["exact"], "decimal": response["decimal"]}
+                )
             _send_json(handler, 200, response)
             return
 

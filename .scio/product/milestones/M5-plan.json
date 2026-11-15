@@ -1,0 +1,35 @@
+{
+ "number": 5,
+ "title": "Number literals, decimal exacts, history and wrapping",
+ "branch": "milestone/5",
+ "features": [
+  {
+   "id": "P29",
+   "tier": "T1",
+   "notes": "Listed as open again because of the owner's 2026-11-15 note. In the evaluator's tokenizer, read a number as the longest run of digits and dots. Accept .5, 5. and 0005. Refuse 1..2, 1.2.3, '.' and 1.5e3.2 as one bad number, never as two numbers multiplied. Keep refusing the Python-only literals from P23 (0x10, 1_000, 2j) and Unicode digits from P27. Do not break implied multiplication (2x, 2pi).",
+   "depends_on": null
+  },
+  {
+   "id": "P31",
+   "tier": "T1",
+   "notes": "Show a decimal input's exact as a clean decimal (1.5 stays 1.5), and 1e5 as 100000. Rationals must stay as fractions (1/3). This changes the same number handling and exact formatting as P29. Check that the P3, P4, P5, P25 and P28 cases still pass, especially 10^1000 giving decimal 1e1000.",
+   "depends_on": [
+    "P29"
+   ]
+  },
+  {
+   "id": "P32",
+   "tier": "T0",
+   "notes": "Add each successful variable or function definition to the history, with the exact its evaluate response gave. A definition that gets a 400 (pi:=3, ans:=5) must not be added. Keep ans tied to the last result, as P6 and P30 require.",
+   "depends_on": [
+    "P31"
+   ]
+  },
+  {
+   "id": "P33",
+   "tier": "T0",
+   "notes": "Static files only: set overflow-wrap:anywhere (or word-break) on body/.tab-panel in style.css, plus min-width:0 where flex or grid children would otherwise widen. Check the history entry, the variable list, the function list and the error line on the Calculator tab. Do not touch the server's Python modules.",
+   "depends_on": []
+  }
+ ]
+}

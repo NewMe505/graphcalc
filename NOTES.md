@@ -6,6 +6,33 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P33 (2026-11-15, Bug #27 fix): `graphcalc/static/style.css`,
+  `tests/test_p33_wrapping.py`. Static files only, per the planner notes --
+  no touch to `graphcalc/static/app.js` or any server Python module. Root
+  cause per issue #27: no stylesheet rule anywhere gave the page a break
+  opportunity inside a long unbroken run of characters, so any server text
+  echoed verbatim into the DOM (a history entry's result, a variable's
+  value, a function's body, or an error line that echoes a long bad input)
+  widened its block and, with it, the whole page -- `{"expr":"10^1000"}`'s
+  1,001-digit exact value made the Calculator tab 8,963px wide in a 1280px
+  window. Fix: added `overflow-wrap: anywhere` (plus `word-break:
+  break-word` as a fallback for a browser that doesn't know
+  `overflow-wrap: anywhere`) to the existing `body` rule in `style.css`.
+  Deliberately on `body`, not on `#calc-history`/`#calc-vars`/`#calc-error`
+  individually, both because `.tab-panel` inherits it (CSS Grid/Flexbox note
+  from the planner -- min-width:0 on a flex/grid child -- turned out to be
+  moot here: `.tab-panel` is plain `display: block`, and `.tabs` is the only
+  flex container, holding short fixed-text tab buttons, not server-echoed
+  text) and because F3 asks for the rule on `body` or `.tab-panel` by name,
+  so every tab, including Graphs/Lists & Statistics/CAS which don't exist
+  yet, inherits the same protection for free. Added
+  `tests/test_p33_wrapping.py`: four Playwright-driven checks (real
+  Chromium, 1280x900 viewport, `document.documentElement.scrollWidth <=
+  window.innerWidth` after submitting each of F1/F2's four expressions) plus
+  one plain static-content regex check of `GET /static/style.css` for F3,
+  skipped via `pytest.importorskip("playwright.sync_api")` if Playwright
+  isn't installed. All five pass; full suite 236 passed, 1 skipped. No plan
+  drift, no design question.
 - P30 (2026-11-14, owner revision "ans:=5 refused"): `graphcalc/names.py`,
   `tests/test_p30_ans_reserved.py`. "ans" is not one of
   `calc._rad_names()`'s constants/functions -- it gets its own dedicated,

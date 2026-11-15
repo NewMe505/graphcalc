@@ -272,3 +272,23 @@
   is always treated as "unknown" and let through unflagged.
   `{"expr":"10^1000"}` (1001 digits) still answers exact `"1000000...0"`
   and decimal `"1e1000"`.
+- Bug #27 (P33): a long result, value or error no longer widens the whole
+  page -- before this fix, `{"expr":"10^1000"}`'s 1,001-digit exact value
+  printed on one unbroken line in `#calc-history`, and the page scrolled
+  sideways instead of staying put (reported in issue #27 as 8,963px wide
+  in a 1280px window).
+  `graphcalc/static/style.css` now sets `overflow-wrap: anywhere` (and
+  `word-break: break-word` as a fallback) on `body`; inherited by every
+  `.tab-panel`, it breaks any unbroken run of characters the server
+  echoes back -- the same digit string in the history entry
+  (`{"expr":"10^1000"}`), the variable list (`{"expr":"a:=10^1000"}`), the
+  function list (`{"expr":"f(x):=x+10^1000"}`), and the error line (a 400
+  whose message echoes a long bad input) -- inside its own block instead
+  of widening `document.documentElement.scrollWidth` past
+  `window.innerWidth`. The rule is global (on `body`, not a per-tab
+  selector), so the Graphs, Lists & Statistics and CAS tabs inherit the
+  same protection for any long text added later. Added
+  `tests/test_p33_wrapping.py` (Playwright-driven: evaluates each case in
+  a real 1280x900 page and asserts `scrollWidth <= innerWidth`, plus a
+  plain static-content check that `style.css` sets `overflow-wrap` or
+  `word-break` on `body`/`.tab-panel`).

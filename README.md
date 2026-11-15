@@ -195,6 +195,17 @@ zero"`). All of it lives in `graphcalc/static/app.js`, using plain `fetch()`
 on relative paths -- no build step, no external resources -- and the page
 still only draws what those three endpoints return.
 
+A long result, value or error never widens the page: `graphcalc/static/
+style.css` sets `overflow-wrap: anywhere` (plus `word-break: break-word` for
+older browsers) on `body`, inherited by every tab panel, so an unbroken run
+of digits -- `"10^1000"`'s 1,001-digit exact value in `#calc-history`, the
+same value stored by `"a:=10^1000"` in `#calc-vars`, a function body such as
+`"f(x):=x+10^1000"`, or a bad expression long enough to echo into
+`#calc-error` -- wraps inside its own block instead of scrolling the whole
+page sideways. The rule lives on `body`, not on any one tab's elements, so
+the Graphs, Lists & Statistics and CAS tabs get the same protection for any
+long text they render later.
+
 ## Develop
 
 ```

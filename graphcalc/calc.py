@@ -50,6 +50,7 @@ from sympy.parsing.sympy_parser import (
 )
 
 from graphcalc.grammar import GrammarError, _tokenize, called_names, check_grammar
+from graphcalc.limits import is_power_too_large
 from graphcalc.numfmt import format_decimal
 
 # Deliberately NOT sympy's bundled implicit_multiplication_application: that
@@ -134,7 +135,18 @@ def _deg_names():
 # the whole left-hand side -- "f(x):=..." (a function definition) has a "("
 # right after the name, which this pattern's \s*:=\s* cannot match, so it
 # is deliberately left for a later plan step to handle.
-_DEFINITION_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*:=\s*(.+?)\s*$")
+#
+# re.ASCII (plan step P27/S2, Bug #21 fix): without it, "\w" is
+# Unicode-aware, so e.g. "x²:=4" or "a２:=1" would match here with the
+# non-ASCII character folded straight into the captured name ("x²", "a２")
+# -- never reaching graphcalc.grammar's own ASCII check at all, since that
+# check only ever runs on the *right*-hand side (`evaluate(rhs, ...)`
+# below), not on a name this regex already split off. With re.ASCII, "\w"
+# only matches [A-Za-z0-9_], so neither pattern matches as a definition at
+# all; both fall through to a plain evaluate(expr) call on the *original,
+# unsplit* string, whose own non-ASCII character is then rejected by
+# graphcalc.grammar.check_grammar the same way any other such character is.
+_DEFINITION_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*:=\s*(.+?)\s*$", re.ASCII)
 
 
 def parse_definition(expr: str) -> tuple[str, str] | None:
@@ -157,8 +169,18 @@ def parse_definition(expr: str) -> tuple[str, str] | None:
 # identifier params, then ":=". "f():=1" (no params) and "f(1):=2" (a
 # non-identifier "param") deliberately do not match -- they fall through to
 # evaluate(), which reports its own CalcError for the stray ":=".
+#
+# re.ASCII (plan step P27/S2, Bug #21 fix): same reasoning as
+# _DEFINITION_RE just above -- without it, "f(x²):=1" would match with the
+# non-ASCII param folded straight into the captured name ("x²"), bypassing
+# graphcalc.grammar's own ASCII check entirely (that check only ever runs
+# on the body, via evaluate(rhs, ...) below, never on a param this regex
+# already split off into `symbols`). With re.ASCII, this simply fails to
+# match "f(x²):=1" as a function definition at all, so it falls through to
+# a plain evaluate() call on the original string instead.
 _FUNCTION_DEFINITION_RE = re.compile(
-    r"^\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)\s*:=\s*(.+?)\s*$"
+    r"^\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)\s*:=\s*(.+?)\s*$",
+    re.ASCII,
 )
 
 
@@ -272,6 +294,14 @@ class CalcError(Exception):
 # features (and tests) can check against the exact wording.
 DOMAIN_ERROR_DIVISION_BY_ZERO = "division by zero"
 DOMAIN_ERROR_UNDEFINED = "undefined"
+# A power whose result graphcalc.limits.is_power_too_large estimates would
+# need more decimal digits than it allows (plan step P28/S1, Bug #20 fix) --
+# "9^9^9", "10^10^10", "2^10000000". Reported the same way as the two
+# domain_error messages above: exact/decimal/complex are all None, and
+# evaluate() never lets sympy's own, real parse_expr touch `expr` at all,
+# so a request that would otherwise freeze the server trying to materialize
+# an astronomically large exact integer instead answers almost immediately.
+DOMAIN_ERROR_TOO_LARGE = "result too large to compute"
 
 _INFINITE_RESULTS = (zoo, oo, -oo)
 
@@ -328,7 +358,21 @@ def evaluate(
     division by zero (1/0 -> zoo, or oo/-oo) or an indeterminate form
     (0/0 -> nan) -- `exact`, `decimal` and `complex` are all None instead,
     and `domain_error` holds a message: "division by zero" for zoo/oo/-oo,
-    "undefined" for nan.
+    "undefined" for nan. The same None/None/None shape, with domain_error
+    "result too large to compute", is also returned -- before sympy's own
+    parse_expr ever runs on `expr` at all -- for a power such as "9^9^9"
+    or "10^10^10" that graphcalc.limits.is_power_too_large estimates would
+    need an unreasonable number of decimal digits to materialize exactly
+    (plan step P28/S1, Bug #20 fix): letting sympy actually attempt that
+    computation could freeze this calculator's single-threaded HTTP server
+    for every other request, for minutes or far longer. The exact/decimal/
+    complex formatting below this docstring also has its own backstop
+    (plan step P28/S2, Bug #20 fix): a ValueError (Python's own int-to-str
+    digit limit, "Exceeds the limit (4300 digits)...") or an OverflowError
+    raised while building `exact`, `decimal` or `complex` -- for a result
+    that size is_power_too_large's own text-only estimate never flagged --
+    is caught there and reported as this same domain_error, never as the
+    raw exception text.
 
     `last_entry` is graphcalc.state.CalcState.ans() -- {"exact": str,
     "srepr": str} for the last successful plain evaluation, or None when
@@ -416,18 +460,30 @@ def evaluate(
     (&, |, ~, <<, >>), Python-only numeric literals (0x10, 0b11, 0o7,
     1_000, 2j, 3J), and an extra argument to a built-in unary function
     (ln(e,2), sqrt(4,2)) -- none of which belong to this calculator's own
-    grammar. A rejection there is turned into a CalcError here the same way
-    any other parse/eval failure is, so it is still a 400, never a 500.
+    grammar. The same gate also rejects any non-ASCII letter, digit, or
+    numeral (plan step P27/S2, Bug #21 fix) -- a fullwidth digit ("２"), an
+    Arabic-indic digit ("٣"), or a superscript/subscript numeral ("x²") --
+    which Python's own Unicode-aware tokenizer would otherwise accept.
+    A rejection there is turned into a CalcError here the same way any
+    other parse/eval failure is, so it is still a 400, never a 500.
 
     Once local_dict is complete, graphcalc.grammar.called_names(expr) is
-    checked against it and against _GLOBAL_DICT (plan step P24/S3, Bug #7
-    fix): a name called with "(" that is in neither -- an uppercase variant
-    of a whitelisted function such as "SIN", or a real sympy name this
-    calculator never whitelisted, such as "zeta" -- raises CalcError
-    ("unknown function '<name>'") before parse_expr ever sees it, rather
-    than letting parse_expr's own auto_symbol/implicit_multiplication
-    fallback silently turn the call into an implicit product between an
-    unresolved Symbol and the parenthesised argument list.
+    checked against it alone (plan step P24/S3, Bug #7 fix; tightened by
+    plan step P27/S1, Bug #21 fix, which dropped the "or in _GLOBAL_DICT"
+    half of this check -- see the inline comment just above the loop that
+    does this, further down in this function, for the full reasoning): a
+    name called with "(" that is not in local_dict -- an uppercase variant
+    of a whitelisted function such as "SIN", a real sympy name this
+    calculator never whitelisted such as "zeta", or one of sympy's own
+    internal constructors ("Integer", "Float", "Rational", "Symbol",
+    "Function", "factorial") that parse_expr's transformations emit
+    internally but that a user's literal text should never be able to
+    reach by name -- raises CalcError ("unknown function '<name>'") before
+    parse_expr ever sees it, rather than letting parse_expr's own
+    auto_symbol/implicit_multiplication fallback silently turn the call
+    into an implicit product between an unresolved Symbol and the
+    parenthesised argument list (or, for an internal constructor, actually
+    succeeding as if it were a normal call).
 
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.
@@ -440,6 +496,26 @@ def evaluate(
         check_grammar(expr)
     except GrammarError as exc:
         raise CalcError(str(exc)) from exc
+
+    # Power-size guard (plan step P28/S1, Bug #20 fix): checked before any
+    # of the real parsing below, including the "bare ans" fast path above
+    # it in the docstring's own ordering -- is_power_too_large has already
+    # parsed `expr` on its own, with evaluate=False, by the time it
+    # returns, so this never costs more than a second cheap parse on an
+    # expression that turns out fine. A flagged `expr` short-circuits
+    # straight to the same response shape a division-by-zero or an
+    # indeterminate form gets -- exact/decimal/complex all None, a
+    # domain_error set -- and sympy's own, real (eagerly-evaluating)
+    # parse_expr, further down, never runs on it at all.
+    if is_power_too_large(expr):
+        return {
+            "expr": expr,
+            "exact": None,
+            "decimal": None,
+            "complex": None,
+            "domain_error": DOMAIN_ERROR_TOO_LARGE,
+            "_result_srepr": None,
+        }
 
     local_dict = _deg_names() if mode == "deg" else _rad_names()
     stored_srepr = None
@@ -465,24 +541,38 @@ def evaluate(
             local_dict["ans"] = (
                 sympify(stored_srepr) if stored_srepr is not None else _UNDEFINED_ANS
             )
-        # A name called with "(" that is in neither local_dict (the rad/deg
+        # A name called with "(" that is not in local_dict (the rad/deg
         # whitelist, a stored variable or function, a function definition's
-        # own param, "ans") nor _GLOBAL_DICT is unknown *and* undefined --
-        # never a function this calculator can call (plan step P24/S3, Bug
-        # #7 fix). Rejected here, before parse_expr ever runs, so an
-        # uppercase name such as "SIN" in "SIN(pi/2)" (not the same name as
-        # the whitelisted, lowercase "sin") or a real sympy name this
-        # calculator never whitelisted ("zeta(2)") is a 400 with
-        # "unknown function '<name>'" -- never left for parse_expr's own
-        # auto_symbol fallback, which would otherwise wrap the call in a
-        # Function(...) that implicit_multiplication's close-paren-before-
-        # open-paren rule immediately downgrades back to a plain Symbol
-        # times the argument list (e.g. "SIN(pi/2)" -> "pi*SIN/2") -- a
-        # name is matched exactly and case-sensitively, never resolved by
-        # building a Function object whose own str() (e.g. "SIN(...)")
-        # would contain the letter I.
+        # own param, "ans") is unknown *and* undefined -- never a function
+        # this calculator can call (plan step P24/S3, Bug #7 fix; tightened
+        # by plan step P27/S1, Bug #21 fix). Rejected here, before
+        # parse_expr ever runs, so an uppercase name such as "SIN" in
+        # "SIN(pi/2)" (not the same name as the whitelisted, lowercase
+        # "sin") or a real sympy name this calculator never whitelisted
+        # ("zeta(2)") is a 400 with "unknown function '<name>'" -- never
+        # left for parse_expr's own auto_symbol fallback, which would
+        # otherwise wrap the call in a Function(...) that implicit_
+        # multiplication's close-paren-before-open-paren rule immediately
+        # downgrades back to a plain Symbol times the argument list (e.g.
+        # "SIN(pi/2)" -> "pi*SIN/2") -- a name is matched exactly and
+        # case-sensitively, never resolved by building a Function object
+        # whose own str() (e.g. "SIN(...)") would contain the letter I.
+        #
+        # _GLOBAL_DICT is deliberately *not* checked here (Bug #21): it
+        # holds only the internal constructors (Integer, Float, Rational,
+        # Symbol, Function, factorial) that parse_expr's own transformations
+        # emit from a generated AST node -- auto_number for a bare "2",
+        # auto_symbol for a bare "x", factorial_notation for postfix "!" --
+        # never from a name the user actually typed followed by "(" in the
+        # source text. called_names(expr) only ever sees the latter, so
+        # checking it against local_dict alone means "Integer(2)",
+        # "Float(2)", "Rational(1,2)" and "factorial(5)" are all rejected
+        # as unknown functions, while "5!" (factorial_notation's own
+        # generated factorial(...) call, never present as the literal text
+        # "factorial(") and "1/3+1/6" (Rational's own generated calls, same
+        # reasoning) still evaluate normally.
         for name in called_names(expr):
-            if name not in local_dict and name not in _GLOBAL_DICT:
+            if name not in local_dict:
                 raise CalcError(f"unknown function '{name}'")
         # A bare "ans" request (nothing else in `expr`) is a true fixed
         # point: reuse the previous call's own `exact`/srepr verbatim
@@ -509,29 +599,51 @@ def evaluate(
     except Exception as exc:
         raise CalcError(f"invalid expression: {expr}") from exc
 
-    exact = exact_override if exact_override is not None else str(result)
+    exact = None
     decimal = None
     complex_value = None
     domain_error = None
 
-    # Check for a domain error before any formatting: a result with no
-    # value (a division by zero, or an indeterminate form) reports
-    # exact/decimal/complex as None instead of trying to format zoo/nan.
-    if result in _INFINITE_RESULTS:
-        domain_error = DOMAIN_ERROR_DIVISION_BY_ZERO
+    try:
+        exact = exact_override if exact_override is not None else str(result)
+
+        # Check for a domain error before any formatting: a result with no
+        # value (a division by zero, or an indeterminate form) reports
+        # exact/decimal/complex as None instead of trying to format zoo/nan.
+        if result in _INFINITE_RESULTS:
+            domain_error = DOMAIN_ERROR_DIVISION_BY_ZERO
+            exact = None
+        elif result is nan:
+            domain_error = DOMAIN_ERROR_UNDEFINED
+            exact = None
+        elif not result.free_symbols and getattr(result, "is_number", False):
+            re_part, im_part = N(result, 17).as_real_imag()
+            if im_part == 0:
+                decimal = format_decimal(result)
+            else:
+                complex_value = {
+                    "real": format_decimal(re_part),
+                    "imag": format_decimal(im_part),
+                }
+    except (ValueError, OverflowError):
+        # Backstop for graphcalc.limits.is_power_too_large's own estimate
+        # (plan step P28/S1) missing a result this large: that guard only
+        # ever looks at literal Pow nodes in `expr`'s own text, so a result
+        # that reaches the same astronomical size some other way -- a huge
+        # stored variable or "ans" referenced here, a factorial, or
+        # simplify() itself growing the value -- is never flagged there and
+        # falls through to this formatting code instead. str(result) on an
+        # Integer past sys.get_int_max_str_digits() raises exactly this
+        # ValueError ("Exceeds the limit (4300 digits)..."); N()/format_
+        # decimal's own float/Decimal conversions can raise either one for
+        # a similarly huge magnitude. Both become this exact same clean
+        # domain_error -- never the raw exception text, which is how the
+        # forbidden "Exceeds the limit" wording used to leak into a 400
+        # (plan step P28/S2, Bug #20 fix).
         exact = None
-    elif result is nan:
-        domain_error = DOMAIN_ERROR_UNDEFINED
-        exact = None
-    elif not result.free_symbols and getattr(result, "is_number", False):
-        re_part, im_part = N(result, 17).as_real_imag()
-        if im_part == 0:
-            decimal = format_decimal(result)
-        else:
-            complex_value = {
-                "real": format_decimal(re_part),
-                "imag": format_decimal(im_part),
-            }
+        decimal = None
+        complex_value = None
+        domain_error = DOMAIN_ERROR_TOO_LARGE
 
     # "_result_srepr": the srepr() this call's own result should be rebuilt
     # from, whether it is later recalled as "ans" (plan step P26/S1) or

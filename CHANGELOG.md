@@ -123,6 +123,19 @@
   caller (today, `decimal` and `complex` in `graphcalc/calc.py`) gets the
   same behavior for free. Smaller magnitudes are unaffected. Added
   `tests/test_p25_scientific_notation.py`.
+- `"ans"` is now a reserved name (P30, owner revision 2026-11-14):
+  `{"expr": "ans:=5"}` answers 400 `{"error": "cannot redefine constant
+  ans"}`, same as `"pi:=3"`, and stores nothing -- the history and the real
+  `ans` slot (the last plain evaluation's result) are left exactly as they
+  were. `{"expr": "ans(x):=1"}` (function-definition syntax) is rejected the
+  same way. Concretely: after `{"expr": "2+2"}`, `{"expr": "ans:=5"}` is a
+  400 and a following `{"expr": "ans"}` still answers exact `"4"`, never
+  `"5"`. `graphcalc/names.py`'s `RESERVED_NAMES` now includes `"ans"`
+  alongside `graphcalc.calc._rad_names()` and `{"i", "oo", "nan"}`, so the
+  existing `check_not_constant("ans")` call every other
+  `"name:=expr"`/`"f(params):=expr"` definition already goes through
+  rejects it before any evaluation or storage happens. Added
+  `tests/test_p30_ans_reserved.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
@@ -209,3 +222,53 @@
   `graphcalc/grammar.py::called_names()`, sharing P23's tokenizer, finds
   every name immediately followed by `"("` so `calc.evaluate` can check it
   against its whitelist before `parse_expr` ever runs.
+- Bug #21 (P27): `POST /api/calc/evaluate` no longer lets a user call one of
+  sympy's internal constructors by name. Before this fix, `calc.evaluate`'s
+  "unknown function" check (Bug #7's `called_names(expr)` scan) let a call
+  through whenever the name was a key of `_GLOBAL_DICT` -- the small set of
+  constructors (`Integer`, `Float`, `Rational`, `Symbol`, `Function`,
+  `factorial`) `parse_expr`'s own transformations need to emit internally
+  from a generated AST node, never meant to be reachable by name from
+  user-typed text -- so `{"expr":"Integer(2)"}`, `{"expr":"Float(2)"}`,
+  `{"expr":"Rational(1,2)"}` and `{"expr":"factorial(5)"}` each evaluated
+  successfully instead of being rejected. Each now answers 400 with a JSON
+  `"error"`. The check now only accepts a called name already in
+  `local_dict` (the rad/deg whitelist, a stored variable or function, a
+  function definition's own param, or "ans"), regardless of whether it is
+  also a `_GLOBAL_DICT` key; `_GLOBAL_DICT` itself is unchanged, still
+  reachable only via a transformation-generated node, never via literal
+  user text -- `{"expr":"5!"}` still answers exact `"120"` and
+  `{"expr":"1/3+1/6"}` still answers exact `"1/2"`.
+- Bug #21 (P27, continued): a non-ASCII digit, letter, or
+  superscript/subscript numeral now answers 400 instead of being silently
+  accepted by Python's own Unicode-aware `\w`/`\d` -- `{"expr":"２+２"}`
+  (fullwidth digits), `{"expr":"٣+1"}` (an Arabic-indic digit) and
+  `{"expr":"x²"}` (an ASCII letter immediately followed by a superscript
+  two) each now answer 400 with a JSON `"error"` instead of evaluating.
+  The same rejection applies to a `"name:=expr"`/`"f(params):=expr"`
+  definition's own name and parameter list, not just its body --
+  `{"expr":"x²:=4"}`, `{"expr":"a２:=1"}` and `{"expr":"f(x²):=1"}` each
+  answer 400 too, and a rejected definition never reaches `CalcState`:
+  `GET /api/calc/vars` lists none of those names afterward, and the stored
+  variables/functions are byte-for-byte unchanged from before the attempt.
+- Bug #20 (P28): `POST /api/calc/evaluate` no longer freezes the server on a
+  power whose exact result would need an unreasonable number of decimal
+  digits -- `{"expr":"9^9^9"}` (~369,671,667 digits), `{"expr":
+  "10^10^10"}` (10,000,000,000 digits) and `{"expr":"2^10000000"}`
+  (~3,010,300 digits) previously made sympy try to materialize that exact
+  integer before answering at all, which could block every other request,
+  including an unrelated `{"expr":"1+1"}`, for minutes or longer. New
+  `graphcalc/limits.py::is_power_too_large()` parses the expression a
+  second time with `evaluate=False` and estimates each power's result size
+  from float `log10` arithmetic alone -- base's magnitude times exponent's
+  magnitude, recursing bottom-up through a right-associative tower such as
+  `9^9^9` without ever computing the inner exponent exactly -- before
+  `calc.evaluate`'s own, real (evaluating) `parse_expr` call runs at all.
+  A power estimated past the limit answers 200 with `domain_error:
+  "result too large to compute"` instead (`exact`/`decimal`/`complex` all
+  `null`), each within the same request/response cycle, so the next
+  request is always answered. A symbolic or non-numeric base/exponent
+  (`{"expr":"x^10000000"}`, a stored variable used as a base or exponent)
+  is always treated as "unknown" and let through unflagged.
+  `{"expr":"10^1000"}` (1001 digits) still answers exact `"1000000...0"`
+  and decimal `"1e1000"`.

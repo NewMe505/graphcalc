@@ -27,8 +27,9 @@ The UI shell is served from two routes:
 
 The calculator's math goes through a JSON API, one endpoint per operation:
 - `POST /api/calc/evaluate` -- body `{"expr": str, "mode": "rad"|"deg"}`
-  (`mode` is optional, default `"rad"`). Parses `+ - * / ^`, parentheses and
-  implied multiplication (e.g. `"2(3+1)^2"`). Answers 200 with
+  (`mode` is optional, default `"rad"`). Parses `+ - * / ^`, parentheses,
+  postfix `!` (e.g. `"5!"` gives exact `"120"`) and implied multiplication
+  (e.g. `"2(3+1)^2"`). Answers 200 with
   `{"expr", "exact", "decimal", "complex", "domain_error"}`: `exact` is
   sympy's simplified result as a string, `decimal` is a 12-significant-digit
   string with no trailing zeros (e.g. `"1/3"` gives `"0.333333333333"`), and
@@ -48,7 +49,17 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   A result with no value answers 200 with `exact`, `decimal` and `complex`
   all `null` and `domain_error` set instead: `"division by zero"` for a
   division by zero (`"1/0"`), or a non-null message for an indeterminate
-  form (`"0/0"`). An undefined name parses as a free symbol, as on the
+  form (`"0/0"`). A power whose exact result would take an unreasonable
+  number of decimal digits to compute -- a tower such as `"9^9^9"` or
+  `"10^10^10"`, or a huge exponent such as `"2^10000000"` -- is sized up
+  from the expression's text alone, before sympy ever tries to compute it,
+  and also answers 200 with `domain_error: "result too large to compute"`
+  instead of blocking the server: each still answers within a few seconds,
+  and a later request (e.g. `"1+1"`) is answered normally, never left
+  waiting behind it. A power that is merely large but still exact, such as
+  `"10^1000"`, is unaffected -- it still answers `exact` (a 1001-digit
+  integer) and `decimal` `"1e1000"`, same as always. An undefined name
+  parses as a free symbol, as on the
   TI-Nspire CAS (`"2x"` gives exact `"2*x"`); a multi-letter name such as
   `"rate"` or `"xy"` is always one symbol, never split into letters, so an
   `e`, `E` or `I` that merely appears inside a longer name never becomes a
@@ -56,8 +67,15 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   only resolve to a constant when typed as a standalone name. Calling a
   name this calculator doesn't whitelist, including a wrongly-cased
   built-in such as `"SIN(pi/2)"` (the whitelist is case-sensitive; only
-  lowercase `"sin"` is a function), answers 400
-  `{"error": "unknown function '<name>'"}`. While the result still has a
+  lowercase `"sin"` is a function) or one of sympy's own internal
+  constructors (e.g. `"Integer(2)"`, `"Float(2)"`, `"Rational(1,2)"`,
+  `"factorial(5)"` -- none of these are callable by name, even though the
+  calculator's own grammar uses them internally for a bare number or
+  postfix `!`), answers 400 `{"error": "unknown function '<name>'"}`.
+  Input is ASCII-only: a non-ASCII digit, letter, or superscript/subscript
+  numeral (e.g. `"２+２"`, `"٣+1"`, `"x²"`) is also a 400, in both a plain
+  expression and a `"name:=expr"`/`"f(params):=expr"` definition's own name
+  and parameter list. While the result still has a
   free symbol, `decimal` (and `complex`) stay `null` instead of being
   formatted. `mode` accepts only `"rad"` or `"deg"`; any other value is a
   400, same as a missing or non-string `expr` or a syntax error -- never
@@ -83,6 +101,11 @@ The calculator's math goes through a JSON API, one endpoint per operation:
     -H "Content-Type: application/json" \
     -d '{"expr": "2^100"}'
   # {"expr": "2^100", "exact": "1267650600228229401496703205376", "decimal": "1.26765060023e30", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "9^9^9"}'
+  # {"expr": "9^9^9", "exact": null, "decimal": null, "complex": null, "domain_error": "result too large to compute"}
   ```
 
 - `GET /api/calc/history` -- 200 `{"history": [...]}`, oldest entry first.
@@ -123,10 +146,16 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   function -- the same way `pi` or `ans` already are; calling a function
   with the wrong number of arguments is a 400, never a 500. Redefining a
   reserved constant or function name (`pi`, `e`, `E`, `I`, `i`, `oo`, `nan`,
-  or a built-in function name) answers 400
-  `{"error": "cannot redefine constant <name>"}` and stores nothing; a
+  `ans`, or a built-in function name) answers 400
+  `{"error": "cannot redefine constant <name>"}` and stores nothing --
+  `"ans:=5"` (or `"ans(x):=1"`) is rejected the same way, leaving the real
+  `ans` (the last plain evaluation's result) and the history both exactly
+  as they were. A
   right-hand side that answers a `domain_error` (e.g. `"a:=1/0"`) answers
-  200 with that error and also stores nothing.
+  200 with that error and also stores nothing. A non-ASCII character
+  anywhere in the name or parameter list (e.g. `"x²:=4"`, `"a２:=1"`,
+  `"f(x²):=1"`) is likewise rejected with 400 and stores nothing --
+  `GET /api/calc/vars` lists none of those names afterward.
 - `GET /api/calc/vars` -- 200 `{"variables": {name: exact}, "functions":
   {name: {"params": [...], "body": exact}}}` for everything defined so far,
   values and bodies both in caret form.

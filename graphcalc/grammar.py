@@ -42,9 +42,16 @@ variant of a built-in such as "SIN", or a real sympy name this calculator
 never whitelisted, "zeta(2)" -- with "unknown function '<name>'" (-> 400)
 before parse_expr ever sees it, rather than letting parse_expr's
 auto_symbol fallback silently turn the call into an implicit product.
+
+_tokenize() also rejects any non-ASCII character this grammar treats as a
+letter, digit, or numeric symbol (plan step P27/S2, Bug #21 fix) -- see
+_check_ascii_only's own docstring just below for why that check has to
+run ahead of the tokenizer regex itself, not as one more alternative
+inside it.
 """
 
 import re
+import unicodedata
 
 
 class GrammarError(Exception):
@@ -143,13 +150,65 @@ def _unary_function_names():
     return frozenset(_rad_names()) - {"pi", "e", "E", "I"}
 
 
+def _check_ascii_only(expr: str) -> None:
+    """Raise GrammarError for any non-ASCII letter, digit, or numeric symbol
+    in `expr` (plan step P27/S2, Bug #21 fix).
+
+    _TOKEN_RE's IDENT group is "[A-Za-z_]\\w*" and its NUMBER group starts
+    with "\\d" -- but Python's own "\\w"/"\\d" are Unicode-aware by default,
+    not the ASCII-only [A-Za-z0-9_] this grammar's docstring implies: a
+    fullwidth digit ("２"), an Arabic-indic digit ("٣"), a non-Latin or
+    accented letter, and a superscript/subscript numeral ("x²", "₂") are
+    all str.isalnum() (so "\\w" matches them) and "２"/"٣" are both
+    str.isdigit() (so "\\d" matches them) too. Left unchecked, the regex
+    silently reads "２+２" as two NUMBER tokens, "x²" as one IDENT token
+    "x²", and so on -- never the tokenizer's own "disallowed character"
+    rejection, because the regex *did* match, just not on the grammar this
+    calculator actually defines.
+
+    Run once, ahead of the per-character tokenizer loop below, rather than
+    folded into _TOKEN_RE as one more alternative: a non-ASCII character
+    that *is* part of a larger regex match (the "²" inside "x²"'s one IDENT
+    token) would never be inspected on its own by that loop at all, since
+    the loop only advances by whole matches, never character by character
+    within one.
+
+    isdigit()/isalpha()/isnumeric() alone already cover every case above
+    (confirmed: "²".isdigit() and "₂".isnumeric() are both True), but the
+    category check is kept too, exactly as the plan step asks (Nd/No for a
+    digit/numeral, any "L*" for a letter) as a second, independent net --
+    belt-and-suspenders against a Unicode character whose isdigit/isalpha/
+    isnumeric answers do not happen to match its own category. A symbol
+    with no letter/digit/numeral meaning at all (e.g. "√", category "Sm")
+    is not raised here -- this grammar has no pass-through mapping for it
+    either, so it still reaches the ordinary "disallowed character"
+    rejection below, via _TOKEN_RE simply failing to match it.
+    """
+    for ch in expr:
+        if ord(ch) < 128:
+            continue
+        category = unicodedata.category(ch)
+        if (
+            ch.isdigit()
+            or ch.isalpha()
+            or ch.isnumeric()
+            or category in ("Nd", "No")
+            or category.startswith("L")
+        ):
+            raise GrammarError(f"disallowed character in expression: {ch!r}")
+
+
 def _tokenize(expr):
     """Yield (group_name, matched_text) for every token in `expr`.
 
     Raises GrammarError for any character the tokenizer regex cannot match
     at all -- e.g. "{", "}", "[", "]", "@", or any other symbol outside the
-    calculator's grammar.
+    calculator's grammar -- and, before any of that (see
+    _check_ascii_only), for any non-ASCII letter, digit, or numeral, even
+    one that is only part of a larger token the regex would otherwise
+    match whole (e.g. the "²" inside "x²").
     """
+    _check_ascii_only(expr)
     pos = 0
     length = len(expr)
     while pos < length:
@@ -199,19 +258,26 @@ def called_names(expr: str) -> set:
     evaluate() calls this *after* building its final local_dict (the
     rad/deg whitelist, stored variables and functions, a function
     definition's own params, "ans"), then rejects any name this returns
-    that is in neither local_dict nor its own global_dict with "unknown
-    function '<name>'" -- a 400, raised before parse_expr ever runs.
-    Without that check, sympy's own parser -- lacking any whitelist entry
-    to call -- falls back to auto_symbol's generic "undefined name follow
-    by (" handling: it wraps the name in a call to the *Function*
-    constructor (never left bound, because the very next step,
-    implicit_multiplication's own close-paren-before-open-paren rule, downgrades
+    that is not in local_dict with "unknown function '<name>'" -- a 400,
+    raised before parse_expr ever runs. (Plan step P27/S1, Bug #21 fix:
+    evaluate() used to also accept a name that was a key of its own
+    global_dict -- the internal sympy constructors parse_expr's
+    transformations emit from a generated AST node, never from literal
+    user text -- which let "Integer(2)", "Float(2)", "Rational(1,2)" and
+    "factorial(5)" all evaluate instead of being rejected; evaluate() now
+    checks local_dict alone, so this function's own return value does not
+    need to change, only what the caller does with it.) Without the
+    local_dict check, sympy's own parser -- lacking any whitelist entry to
+    call -- falls back to auto_symbol's generic "undefined name follow by
+    (" handling: it wraps the name in a call to the *Function* constructor
+    (never left bound, because the very next step, implicit_
+    multiplication's own close-paren-before-open-paren rule, downgrades
     that right back to a plain Symbol and inserts a "*"), so "SIN(pi/2)"
     would otherwise silently become the implicit product "pi*SIN/2" instead
     of the 400 a call on an unknown name should be. This function only
     reports the name was *called*; it has no opinion on whether that name
     turns out to be known -- the caller decides that by checking its own
-    local_dict and global_dict.
+    local_dict.
     """
     tokens = list(_tokenize(expr))
     names = set()
@@ -231,10 +297,14 @@ def check_grammar(expr: str) -> None:
     Runs before graphcalc.calc.evaluate's sympy parse: rejects Python
     comparison/bitwise/shift/floor-division operators, Python-only numeric
     literals (hex/bin/oct, underscore digit grouping, a j/J imaginary
-    suffix), and an extra argument to one of the calculator's built-in
-    unary functions (ln(e,2), sqrt(4,2)). Does nothing (returns None) for
-    grammar the calculator does accept, including postfix "!", a top-level
-    "name:=expr" definition, and implied multiplication.
+    suffix), an extra argument to one of the calculator's built-in unary
+    functions (ln(e,2), sqrt(4,2)), and any non-ASCII letter, digit, or
+    numeral such as a fullwidth digit, an Arabic-indic digit, or a
+    superscript/subscript numeral (e.g. "２+２", "x²" -- plan step P27/S2,
+    Bug #21 fix; see _check_ascii_only, called from _tokenize). Does
+    nothing (returns None) for grammar the calculator does accept,
+    including postfix "!", a top-level "name:=expr" definition, and
+    implied multiplication.
     """
     tokens = list(_tokenize(expr))
     unary_functions = _unary_function_names()

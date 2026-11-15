@@ -2,7 +2,7 @@
   "product": "graphcalc",
   "stack": "python",
   "bootstrap_commit": "b7253fb5ca7cd5f4699753269aa3ded0ee4e43bd",
-  "build_thread": "build-graphcalc-m2",
+  "build_thread": "build-graphcalc-m3",
   "milestones": [
     {
       "id": "M1",
@@ -35,6 +35,22 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/13",
       "merged_commit": "66676f758128a2b75cc3e552f13a1e52d2732a50",
       "usd": 17.097
+    },
+    {
+      "id": "M3",
+      "title": "Evaluator grammar, naming and robustness fixes",
+      "status": "done",
+      "branch": "milestone/3",
+      "features": [
+        "P23",
+        "P24",
+        "P25",
+        "P26"
+      ],
+      "pr_number": 19,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/19",
+      "merged_commit": "f1d5404bb7f5b9120fc62ed10515af0bffc63ee3",
+      "usd": 30.6874
     }
   ],
   "features": [
@@ -261,26 +277,46 @@
     {
       "id": "P23",
       "description": "Bug #5 fix: evaluate accepts only the calculator's grammar; Python operators, Python-only number literals and extra function arguments answer 400 with a JSON error.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "f3e1154a15deacd10b0f272cfaaa0b949a5dd913",
+      "thread": "build-graphcalc-m2-p23-a1",
+      "tier": "T1",
+      "issue": 15,
+      "usd": 4.6297
     },
     {
       "id": "P24",
       "description": "Bug #7 fix: a multi-letter name such as xy is one name, as on the TI-Nspire CAS; a name is never split into letters, so e, E or I inside a name never becomes a constant.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "41c4d041ae07246a9afd42f5dd7d034a4d572438",
+      "thread": "build-graphcalc-m2-p24-a1",
+      "tier": "T1",
+      "issue": 16,
+      "usd": 4.2288
     },
     {
       "id": "P25",
       "description": "Large decimals are written in scientific notation past 12 digits.",
+      "status": "done",
+      "commit": "575209c5ff418c8fd76e77b4c11c92c1a93900b6",
+      "thread": "build-graphcalc-m2-p25-a1",
+      "tier": "T0",
+      "issue": 17,
+      "usd": 1.0891
+    },
+    {
+      "id": "P26",
+      "description": "Bug #14 fix: no answer, variable or function the calculator stores can break a later evaluation.",
+      "status": "done",
+      "commit": "5de51ea77447b17d15f56c8e63ac0071f2df2d5d",
+      "thread": "build-graphcalc-m3-p26-a4",
+      "tier": "T1",
+      "issue": 18,
+      "usd": 9.9613
+    },
+    {
+      "id": "P27",
+      "description": "Bug #21 fix: evaluate accepts only the calculator's own function names and ASCII digits and letters; sympy's internal constructors are never callable, and a Unicode digit, letter or superscript answers 400.",
       "status": "todo",
       "commit": null,
       "thread": null,
@@ -289,8 +325,48 @@
       "usd": 0.0
     },
     {
-      "id": "P26",
-      "description": "Bug #14 fix: no answer, variable or function the calculator stores can break a later evaluation.",
+      "id": "P28",
+      "description": "Bug #20 fix: no input can freeze the calculator; a result too large to compute answers quickly with an error, and the next request is still answered.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P29",
+      "description": "Owner revision (2026-11-14): .5 and 5. accepted, as on a TI.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P30",
+      "description": "Owner revision (2026-11-14): ans:=5 refused.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P31",
+      "description": "Owner revision (2026-11-14): clean exact for decimals.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
+    },
+    {
+      "id": "P32",
+      "description": "Owner revision (2026-11-14): definitions in history.",
       "status": "todo",
       "commit": null,
       "thread": null,
@@ -299,5 +375,5 @@
       "usd": 0.0
     }
   ],
-  "updated": "2026-11-05T07:38:06+00:00"
+  "updated": "2026-11-14T21:31:53+00:00"
 }

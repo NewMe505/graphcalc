@@ -52,6 +52,32 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 - [ ] After {"expr":"a:=beta+1"} or {"expr":"f(x):=beta(x)"}, {"expr":"1+1"} returns 200 with exact "2"
 - [ ] After any input that returns 200, {"expr":"ans"} returns 200 with the same exact; checked after {"expr":"gamma"}, {"expr":"S"}, {"expr":"N"} and {"expr":"Q"}
 
+### P27: Bug #21 fix: evaluate accepts only the calculator's own function names and ASCII digits and letters; sympy's internal constructors are never callable, and a Unicode digit, letter or superscript answers 400.
+- [ ] {"expr":"Integer(2)"}, {"expr":"Float(2)"}, {"expr":"Rational(1,2)"} and {"expr":"factorial(5)"} each return 400 with a JSON error; {"expr":"5!"} still returns exact "120" and {"expr":"1/3+1/6"} exact "1/2"
+- [ ] {"expr":"２+２"}, {"expr":"٣+1"} and {"expr":"x²"} each return 400 with a JSON error
+- [ ] {"expr":"x²:=4"}, {"expr":"a２:=1"} and {"expr":"f(x²):=1"} each return 400 with a JSON error, and GET /api/calc/vars lists none of them
+
+### P28: Bug #20 fix: no input can freeze the calculator; a result too large to compute answers quickly with an error, and the next request is still answered.
+- [ ] {"expr":"9^9^9"} and {"expr":"10^10^10"} each answer within 10 seconds, with 200 and a non-null domain_error or with 400 and a JSON error; {"expr":"1+1"} sent next returns exact "2"
+- [ ] {"expr":"2^10000000"} answers within 10 seconds, and its response contains no "Exceeds the limit" or "unexpected error" text
+- [ ] {"expr":"10^1000"} still returns decimal "1e1000"
+
+### P29: Owner revision (2026-11-14): .5 and 5. accepted, as on a TI.
+- [ ] {"expr":".5"} returns 200 with decimal "0.5", {"expr":"5."} returns decimal "5" and {"expr":"0005"} returns exact "5"
+- [ ] {"expr":"1..2"}, {"expr":"1.2.3"} and {"expr":"."} still return 400 with a JSON error
+- [ ] A number is read as the longest run of digits and dots (owner, 2026-11-15): {"expr":"1.2.3"}, {"expr":"1..2"} and {"expr":"1.5e3.2"} each return 400 as one bad number, never two numbers multiplied
+
+### P30: Owner revision (2026-11-14): ans:=5 refused.
+- [ ] {"expr":"ans:=5"} returns 400 with a JSON error; after {"expr":"2+2"}, {"expr":"ans"} still returns exact "4"
+
+### P31: Owner revision (2026-11-14): clean exact for decimals.
+- [ ] {"expr":"1.5"} returns exact "1.5" and decimal "1.5"; {"expr":"1e5"} returns exact "100000"
+- [ ] {"expr":"1/3"} still returns exact "1/3"
+
+### P32: Owner revision (2026-11-14): definitions in history.
+- [ ] After {"expr":"a:=5"} and then {"expr":"f(x):=x^2+1"}, the last two entries of GET /api/calc/history have expr "a:=5" and "f(x):=x^2+1", each with the exact its evaluate response gave
+- [ ] A definition that returns 400, such as {"expr":"pi:=3"}, is not added to the history
+
 ### P5: Non-real results return 200 with an exact form and a rectangular complex form {"real","imag"}. 200 with a domain_error only when the math has no value (1/0, 0/0). 400 for client mistakes: syntax, missing or invalid parameters, redefining a constant. An undefined name is a symbol (as on the TI-Nspire CAS); decimal is null while a free name remains.
 - [ ] {"expr":"sqrt(-4)"} returns 200 with exact "2*I" and complex {"real":"0","imag":"2"}; {"expr":"ln(-1)"} returns exact "I*pi" and complex {"real":"0","imag":"3.14159265359"}
 - [ ] {"expr":"1/0"} returns 200 with exact null, decimal null and domain_error "division by zero"

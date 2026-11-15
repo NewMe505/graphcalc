@@ -1,0 +1,37 @@
+{
+ "number": 4,
+ "title": "Evaluator hardening: names, Unicode, freezes, literals",
+ "branch": "milestone/4",
+ "features": [
+  {
+   "id": "P27",
+   "tier": "T1",
+   "notes": "Allow only a fixed list of callables in evaluate: the calculator functions plus user-defined ones. Reject non-ASCII digits, letters and superscripts in the tokenizer, for both expressions and definitions. A rejected definition must not change the stored vars. Keep P23-P26 passing.",
+   "depends_on": null
+  },
+  {
+   "id": "P28",
+   "tier": "T1",
+   "notes": "Estimate the size of a power before sympy evaluates it. Return a domain_error or a 400 when it is too large, so a request never blocks the server. No 'Exceeds the limit' or 'unexpected error' text in responses. 10^1000 must still give decimal '1e1000'. Test the timing of 9^9^9 and that the next request is answered.",
+   "depends_on": [
+    "P27"
+   ]
+  },
+  {
+   "id": "P29",
+   "tier": "T0",
+   "notes": "Number-literal rule in the tokenizer: accept .5, 5. and leading zeros. Keep 1..2, 1.2.3 and '.' as 400. Do not reintroduce the Python literals that P23 blocks (0x, 0b, 1_000, j).",
+   "depends_on": [
+    "P28"
+   ]
+  },
+  {
+   "id": "P30",
+   "tier": "T0",
+   "notes": "Treat 'ans' as a reserved name in the definition handling: ans:=5 returns 400 and leaves the history and ans unchanged.",
+   "depends_on": [
+    "P29"
+   ]
+  }
+ ]
+}

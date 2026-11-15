@@ -65,6 +65,7 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 ### P29: Owner revision (2026-11-14): .5 and 5. accepted, as on a TI.
 - [ ] {"expr":".5"} returns 200 with decimal "0.5", {"expr":"5."} returns decimal "5" and {"expr":"0005"} returns exact "5"
 - [ ] {"expr":"1..2"}, {"expr":"1.2.3"} and {"expr":"."} still return 400 with a JSON error
+- [ ] A number is read as the longest run of digits and dots (owner, 2026-11-15): {"expr":"1.2.3"}, {"expr":"1..2"} and {"expr":"1.5e3.2"} each return 400 as one bad number, never two numbers multiplied
 
 ### P30: Owner revision (2026-11-14): ans:=5 refused.
 - [ ] {"expr":"ans:=5"} returns 400 with a JSON error; after {"expr":"2+2"}, {"expr":"ans"} still returns exact "4"

@@ -24,9 +24,12 @@ import urllib.error
 import urllib.request
 from http.server import HTTPServer
 
+from sympy import Integer, Rational
+
 from graphcalc import calc
 from graphcalc.calc import DOMAIN_ERROR_TOO_LARGE, evaluate
 from graphcalc.cli import Handler
+from graphcalc.numfmt import format_decimal
 
 # Generous relative to the 10-second acceptance budget, but still proves
 # "answers quickly" rather than "the test's own timeout fired first".
@@ -168,6 +171,42 @@ def test_p28_10_to_the_1000_still_gives_decimal_1e1000_over_http():
     finally:
         server.shutdown()
         server.server_close()
+
+
+# ---- P28/S3: format_decimal's scientific branch for magnitudes past float
+# range (~1.8e308) is built from sympy's own N()/Decimal, never float() ----
+
+
+def test_format_decimal_past_float_range_builds_scientific_form_without_float():
+    # Integer(10) ** 400 already exceeds the largest finite float
+    # (sys.float_info.max, ~1.7976931348623157e308): float(Integer(10)**400)
+    # would raise OverflowError. format_decimal must still produce a clean
+    # mantissa/exponent pair -- which it can only do by reading sympy's own
+    # evalf digits (via N()) and Decimal, never by calling float() on the
+    # value or on any intermediate derived from it.
+    assert format_decimal(Integer(10) ** 400) == "1e400"
+    assert format_decimal(Integer(10) ** 1000) == "1e1000"
+    assert format_decimal(-(Integer(10) ** 1000)) == "-1e1000"
+
+
+def test_format_decimal_past_float_range_strips_trailing_zeros_and_dot():
+    # The mantissa strips trailing zeros and a trailing "." (never leaving a
+    # bare "1.0e..."), and the exponent carries no "+" sign and no zero
+    # padding -- "e400", "e1000", not "e+0400" or "e+1000".
+    text = format_decimal(Integer(10) ** 1000)
+    assert text == "1e1000", text
+    assert "+" not in text, text
+    assert ".0e" not in text, text
+    # A mantissa that is not a bare power of ten still keeps its own
+    # significant digits, with trailing zeros stripped: 1.2 * 10**3991.
+    assert format_decimal(Integer(12) * Integer(10) ** 3990) == "1.2e3991"
+
+
+def test_format_decimal_existing_small_number_result_unaffected():
+    # An existing small-number decimal result -- well within float range --
+    # still formats exactly as before this fix: fixed-point, not scientific.
+    assert format_decimal(Rational(1, 3)) == "0.333333333333"
+    assert format_decimal(Integer(32)) == "32"
 
 
 # ---- P28/S2: formatting backstop + raw-body check on 2^10000000 ----

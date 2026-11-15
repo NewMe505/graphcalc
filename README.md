@@ -27,8 +27,9 @@ The UI shell is served from two routes:
 
 The calculator's math goes through a JSON API, one endpoint per operation:
 - `POST /api/calc/evaluate` -- body `{"expr": str, "mode": "rad"|"deg"}`
-  (`mode` is optional, default `"rad"`). Parses `+ - * / ^`, parentheses and
-  implied multiplication (e.g. `"2(3+1)^2"`). Answers 200 with
+  (`mode` is optional, default `"rad"`). Parses `+ - * / ^`, parentheses,
+  postfix `!` (e.g. `"5!"` gives exact `"120"`) and implied multiplication
+  (e.g. `"2(3+1)^2"`). Answers 200 with
   `{"expr", "exact", "decimal", "complex", "domain_error"}`: `exact` is
   sympy's simplified result as a string, `decimal` is a 12-significant-digit
   string with no trailing zeros (e.g. `"1/3"` gives `"0.333333333333"`), and
@@ -56,8 +57,15 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   only resolve to a constant when typed as a standalone name. Calling a
   name this calculator doesn't whitelist, including a wrongly-cased
   built-in such as `"SIN(pi/2)"` (the whitelist is case-sensitive; only
-  lowercase `"sin"` is a function), answers 400
-  `{"error": "unknown function '<name>'"}`. While the result still has a
+  lowercase `"sin"` is a function) or one of sympy's own internal
+  constructors (e.g. `"Integer(2)"`, `"Float(2)"`, `"Rational(1,2)"`,
+  `"factorial(5)"` -- none of these are callable by name, even though the
+  calculator's own grammar uses them internally for a bare number or
+  postfix `!`), answers 400 `{"error": "unknown function '<name>'"}`.
+  Input is ASCII-only: a non-ASCII digit, letter, or superscript/subscript
+  numeral (e.g. `"２+２"`, `"٣+1"`, `"x²"`) is also a 400, in both a plain
+  expression and a `"name:=expr"`/`"f(params):=expr"` definition's own name
+  and parameter list. While the result still has a
   free symbol, `decimal` (and `complex`) stay `null` instead of being
   formatted. `mode` accepts only `"rad"` or `"deg"`; any other value is a
   400, same as a missing or non-string `expr` or a syntax error -- never
@@ -126,7 +134,10 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   or a built-in function name) answers 400
   `{"error": "cannot redefine constant <name>"}` and stores nothing; a
   right-hand side that answers a `domain_error` (e.g. `"a:=1/0"`) answers
-  200 with that error and also stores nothing.
+  200 with that error and also stores nothing. A non-ASCII character
+  anywhere in the name or parameter list (e.g. `"x²:=4"`, `"a２:=1"`,
+  `"f(x²):=1"`) is likewise rejected with 400 and stores nothing --
+  `GET /api/calc/vars` lists none of those names afterward.
 - `GET /api/calc/vars` -- 200 `{"variables": {name: exact}, "functions":
   {name: {"params": [...], "body": exact}}}` for everything defined so far,
   values and bodies both in caret form.

@@ -258,19 +258,26 @@ def called_names(expr: str) -> set:
     evaluate() calls this *after* building its final local_dict (the
     rad/deg whitelist, stored variables and functions, a function
     definition's own params, "ans"), then rejects any name this returns
-    that is in neither local_dict nor its own global_dict with "unknown
-    function '<name>'" -- a 400, raised before parse_expr ever runs.
-    Without that check, sympy's own parser -- lacking any whitelist entry
-    to call -- falls back to auto_symbol's generic "undefined name follow
-    by (" handling: it wraps the name in a call to the *Function*
-    constructor (never left bound, because the very next step,
-    implicit_multiplication's own close-paren-before-open-paren rule, downgrades
+    that is not in local_dict with "unknown function '<name>'" -- a 400,
+    raised before parse_expr ever runs. (Plan step P27/S1, Bug #21 fix:
+    evaluate() used to also accept a name that was a key of its own
+    global_dict -- the internal sympy constructors parse_expr's
+    transformations emit from a generated AST node, never from literal
+    user text -- which let "Integer(2)", "Float(2)", "Rational(1,2)" and
+    "factorial(5)" all evaluate instead of being rejected; evaluate() now
+    checks local_dict alone, so this function's own return value does not
+    need to change, only what the caller does with it.) Without the
+    local_dict check, sympy's own parser -- lacking any whitelist entry to
+    call -- falls back to auto_symbol's generic "undefined name follow by
+    (" handling: it wraps the name in a call to the *Function* constructor
+    (never left bound, because the very next step, implicit_
+    multiplication's own close-paren-before-open-paren rule, downgrades
     that right back to a plain Symbol and inserts a "*"), so "SIN(pi/2)"
     would otherwise silently become the implicit product "pi*SIN/2" instead
     of the 400 a call on an unknown name should be. This function only
     reports the name was *called*; it has no opinion on whether that name
     turns out to be known -- the caller decides that by checking its own
-    local_dict and global_dict.
+    local_dict.
     """
     tokens = list(_tokenize(expr))
     names = set()
@@ -290,10 +297,14 @@ def check_grammar(expr: str) -> None:
     Runs before graphcalc.calc.evaluate's sympy parse: rejects Python
     comparison/bitwise/shift/floor-division operators, Python-only numeric
     literals (hex/bin/oct, underscore digit grouping, a j/J imaginary
-    suffix), and an extra argument to one of the calculator's built-in
-    unary functions (ln(e,2), sqrt(4,2)). Does nothing (returns None) for
-    grammar the calculator does accept, including postfix "!", a top-level
-    "name:=expr" definition, and implied multiplication.
+    suffix), an extra argument to one of the calculator's built-in unary
+    functions (ln(e,2), sqrt(4,2)), and any non-ASCII letter, digit, or
+    numeral such as a fullwidth digit, an Arabic-indic digit, or a
+    superscript/subscript numeral (e.g. "２+２", "x²" -- plan step P27/S2,
+    Bug #21 fix; see _check_ascii_only, called from _tokenize). Does
+    nothing (returns None) for grammar the calculator does accept,
+    including postfix "!", a top-level "name:=expr" definition, and
+    implied multiplication.
     """
     tokens = list(_tokenize(expr))
     unary_functions = _unary_function_names()

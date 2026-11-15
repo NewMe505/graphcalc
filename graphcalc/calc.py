@@ -437,18 +437,30 @@ def evaluate(
     (&, |, ~, <<, >>), Python-only numeric literals (0x10, 0b11, 0o7,
     1_000, 2j, 3J), and an extra argument to a built-in unary function
     (ln(e,2), sqrt(4,2)) -- none of which belong to this calculator's own
-    grammar. A rejection there is turned into a CalcError here the same way
-    any other parse/eval failure is, so it is still a 400, never a 500.
+    grammar. The same gate also rejects any non-ASCII letter, digit, or
+    numeral (plan step P27/S2, Bug #21 fix) -- a fullwidth digit ("２"), an
+    Arabic-indic digit ("٣"), or a superscript/subscript numeral ("x²") --
+    which Python's own Unicode-aware tokenizer would otherwise accept.
+    A rejection there is turned into a CalcError here the same way any
+    other parse/eval failure is, so it is still a 400, never a 500.
 
     Once local_dict is complete, graphcalc.grammar.called_names(expr) is
-    checked against it and against _GLOBAL_DICT (plan step P24/S3, Bug #7
-    fix): a name called with "(" that is in neither -- an uppercase variant
-    of a whitelisted function such as "SIN", or a real sympy name this
-    calculator never whitelisted, such as "zeta" -- raises CalcError
-    ("unknown function '<name>'") before parse_expr ever sees it, rather
-    than letting parse_expr's own auto_symbol/implicit_multiplication
-    fallback silently turn the call into an implicit product between an
-    unresolved Symbol and the parenthesised argument list.
+    checked against it alone (plan step P24/S3, Bug #7 fix; tightened by
+    plan step P27/S1, Bug #21 fix, which dropped the "or in _GLOBAL_DICT"
+    half of this check -- see the inline comment just above the loop that
+    does this, further down in this function, for the full reasoning): a
+    name called with "(" that is not in local_dict -- an uppercase variant
+    of a whitelisted function such as "SIN", a real sympy name this
+    calculator never whitelisted such as "zeta", or one of sympy's own
+    internal constructors ("Integer", "Float", "Rational", "Symbol",
+    "Function", "factorial") that parse_expr's transformations emit
+    internally but that a user's literal text should never be able to
+    reach by name -- raises CalcError ("unknown function '<name>'") before
+    parse_expr ever sees it, rather than letting parse_expr's own
+    auto_symbol/implicit_multiplication fallback silently turn the call
+    into an implicit product between an unresolved Symbol and the
+    parenthesised argument list (or, for an internal constructor, actually
+    succeeding as if it were a normal call).
 
     Raises CalcError (never any other exception) for a syntax error, an
     unparseable expression, or an invalid mode.

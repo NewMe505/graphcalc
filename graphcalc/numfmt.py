@@ -11,6 +11,41 @@ from decimal import Decimal, localcontext
 from sympy import N
 
 
+def clean_float_exact(value):
+    """Render a sympy ``Float`` as a clean, un-padded decimal string.
+
+    sympy's own ``str()`` of a ``Float`` pads the mantissa out to the
+    value's working precision (15 decimal digits by default), so a
+    user-typed literal like "1.5" prints as "1.50000000000000" and "1e5"
+    prints as "100000.000000000" -- never what the `exact` field of an
+    evaluate response should show for a decimal literal (plan step P31).
+    This strips that padding -- trailing fractional zeros, then a trailing
+    "." -- so "1.50000000000000" -> "1.5" and "100000.000000000" ->
+    "100000", without rounding away any significant digit the Float
+    actually carries (unlike `format_decimal`, which rounds to `sig`
+    significant digits for the separate `decimal` field).
+
+    For every magnitude this calculator's Float literals and results
+    actually reach, sympy's own `str()` already uses plain fixed-point
+    notation ("123.456", "100000000000000000000."), and this function
+    never introduces exponent notation for those. Only the rare magnitude
+    where sympy's own `str()` already switches to scientific notation
+    (e.g. "1.00000000000000e-10") carries an "e"/"E" here; that mantissa is
+    cleaned the same way and the exponent is re-printed as a plain int
+    (no "+", no leading zeros), matching `format_decimal`'s own exponent
+    style.
+    """
+    text = str(value)
+    mantissa, sep, exponent = text.partition("e")
+    if not sep:
+        mantissa, sep, exponent = text.partition("E")
+    if "." in mantissa:
+        mantissa = mantissa.rstrip("0").rstrip(".")
+    if sep:
+        return f"{mantissa}e{int(exponent)}"
+    return mantissa
+
+
 def format_decimal(value, sig=12):
     """Render `value` as a decimal string with `sig` significant digits.
 

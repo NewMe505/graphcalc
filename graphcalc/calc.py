@@ -57,7 +57,7 @@ from graphcalc.grammar import (
     normalize_numbers,
 )
 from graphcalc.limits import is_power_too_large
-from graphcalc.numfmt import format_decimal
+from graphcalc.numfmt import clean_float_exact, format_decimal
 
 # Deliberately NOT sympy's bundled implicit_multiplication_application: that
 # tuple opens with split_symbols, which breaks a multi-letter identifier such
@@ -625,7 +625,21 @@ def evaluate(
     domain_error = None
 
     try:
-        exact = exact_override if exact_override is not None else str(result)
+        if exact_override is not None:
+            exact = exact_override
+        elif getattr(result, "is_Float", False):
+            # A decimal literal (or a result that stayed a Float through
+            # simplify, e.g. "1.5" or "1e5") -- plan step P31. sympy's own
+            # str() pads these out to their working precision
+            # ("1.50000000000000", "100000.000000000"); clean_float_exact
+            # strips that padding so `exact` matches what was typed/
+            # computed ("1.5", "100000") instead. Anything that is not a
+            # Float -- Rational, Integer, symbolic, zoo, nan -- keeps
+            # plain str(result) exactly as before, so "1/3" still reports
+            # exact "1/3".
+            exact = clean_float_exact(result)
+        else:
+            exact = str(result)
 
         # Check for a domain error before any formatting: a result with no
         # value (a division by zero, or an indeterminate form) reports

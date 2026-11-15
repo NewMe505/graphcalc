@@ -551,15 +551,19 @@ def test_p29_accept_evaluate_leading_zero():
 
 
 def test_p29_accept_evaluate_mixed_implied_mult():
+    # Plan step P31 ("clean exact for decimals") strips the padding
+    # sympy's own str(Float) would otherwise leave here -- "2" not
+    # "2.00000000000000" -- since the result is a Float, not an Integer.
     status, body = _evaluate_over_http(".5x", setup=("x:=4",))
     assert status == 200
-    assert body["exact"] == "2.00000000000000"
+    assert body["exact"] == "2"
 
 
 def test_p29_accept_evaluate_mixed_explicit_mult():
+    # Same P31 cleanup as above: "1", not the padded "1.00000000000000".
     status, body = _evaluate_over_http("2*.5")
     assert status == 200
-    assert body["exact"] == "1.00000000000000"
+    assert body["exact"] == "1"
 
 
 def _evaluate_over_http(expr, setup=()):

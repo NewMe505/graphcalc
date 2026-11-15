@@ -134,7 +134,18 @@ def _deg_names():
 # the whole left-hand side -- "f(x):=..." (a function definition) has a "("
 # right after the name, which this pattern's \s*:=\s* cannot match, so it
 # is deliberately left for a later plan step to handle.
-_DEFINITION_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*:=\s*(.+?)\s*$")
+#
+# re.ASCII (plan step P27/S2, Bug #21 fix): without it, "\w" is
+# Unicode-aware, so e.g. "x²:=4" or "a２:=1" would match here with the
+# non-ASCII character folded straight into the captured name ("x²", "a２")
+# -- never reaching graphcalc.grammar's own ASCII check at all, since that
+# check only ever runs on the *right*-hand side (`evaluate(rhs, ...)`
+# below), not on a name this regex already split off. With re.ASCII, "\w"
+# only matches [A-Za-z0-9_], so neither pattern matches as a definition at
+# all; both fall through to a plain evaluate(expr) call on the *original,
+# unsplit* string, whose own non-ASCII character is then rejected by
+# graphcalc.grammar.check_grammar the same way any other such character is.
+_DEFINITION_RE = re.compile(r"^\s*([A-Za-z_]\w*)\s*:=\s*(.+?)\s*$", re.ASCII)
 
 
 def parse_definition(expr: str) -> tuple[str, str] | None:
@@ -157,8 +168,18 @@ def parse_definition(expr: str) -> tuple[str, str] | None:
 # identifier params, then ":=". "f():=1" (no params) and "f(1):=2" (a
 # non-identifier "param") deliberately do not match -- they fall through to
 # evaluate(), which reports its own CalcError for the stray ":=".
+#
+# re.ASCII (plan step P27/S2, Bug #21 fix): same reasoning as
+# _DEFINITION_RE just above -- without it, "f(x²):=1" would match with the
+# non-ASCII param folded straight into the captured name ("x²"), bypassing
+# graphcalc.grammar's own ASCII check entirely (that check only ever runs
+# on the body, via evaluate(rhs, ...) below, never on a param this regex
+# already split off into `symbols`). With re.ASCII, this simply fails to
+# match "f(x²):=1" as a function definition at all, so it falls through to
+# a plain evaluate() call on the original string instead.
 _FUNCTION_DEFINITION_RE = re.compile(
-    r"^\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)\s*:=\s*(.+?)\s*$"
+    r"^\s*([A-Za-z_]\w*)\s*\(\s*([A-Za-z_]\w*(?:\s*,\s*[A-Za-z_]\w*)*)\s*\)\s*:=\s*(.+?)\s*$",
+    re.ASCII,
 )
 
 

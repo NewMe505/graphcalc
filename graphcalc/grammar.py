@@ -42,9 +42,16 @@ variant of a built-in such as "SIN", or a real sympy name this calculator
 never whitelisted, "zeta(2)" -- with "unknown function '<name>'" (-> 400)
 before parse_expr ever sees it, rather than letting parse_expr's
 auto_symbol fallback silently turn the call into an implicit product.
+
+_tokenize() also rejects any non-ASCII character this grammar treats as a
+letter, digit, or numeric symbol (plan step P27/S2, Bug #21 fix) -- see
+_check_ascii_only's own docstring just below for why that check has to
+run ahead of the tokenizer regex itself, not as one more alternative
+inside it.
 """
 
 import re
+import unicodedata
 
 
 class GrammarError(Exception):
@@ -143,13 +150,65 @@ def _unary_function_names():
     return frozenset(_rad_names()) - {"pi", "e", "E", "I"}
 
 
+def _check_ascii_only(expr: str) -> None:
+    """Raise GrammarError for any non-ASCII letter, digit, or numeric symbol
+    in `expr` (plan step P27/S2, Bug #21 fix).
+
+    _TOKEN_RE's IDENT group is "[A-Za-z_]\\w*" and its NUMBER group starts
+    with "\\d" -- but Python's own "\\w"/"\\d" are Unicode-aware by default,
+    not the ASCII-only [A-Za-z0-9_] this grammar's docstring implies: a
+    fullwidth digit ("２"), an Arabic-indic digit ("٣"), a non-Latin or
+    accented letter, and a superscript/subscript numeral ("x²", "₂") are
+    all str.isalnum() (so "\\w" matches them) and "２"/"٣" are both
+    str.isdigit() (so "\\d" matches them) too. Left unchecked, the regex
+    silently reads "２+２" as two NUMBER tokens, "x²" as one IDENT token
+    "x²", and so on -- never the tokenizer's own "disallowed character"
+    rejection, because the regex *did* match, just not on the grammar this
+    calculator actually defines.
+
+    Run once, ahead of the per-character tokenizer loop below, rather than
+    folded into _TOKEN_RE as one more alternative: a non-ASCII character
+    that *is* part of a larger regex match (the "²" inside "x²"'s one IDENT
+    token) would never be inspected on its own by that loop at all, since
+    the loop only advances by whole matches, never character by character
+    within one.
+
+    isdigit()/isalpha()/isnumeric() alone already cover every case above
+    (confirmed: "²".isdigit() and "₂".isnumeric() are both True), but the
+    category check is kept too, exactly as the plan step asks (Nd/No for a
+    digit/numeral, any "L*" for a letter) as a second, independent net --
+    belt-and-suspenders against a Unicode character whose isdigit/isalpha/
+    isnumeric answers do not happen to match its own category. A symbol
+    with no letter/digit/numeral meaning at all (e.g. "√", category "Sm")
+    is not raised here -- this grammar has no pass-through mapping for it
+    either, so it still reaches the ordinary "disallowed character"
+    rejection below, via _TOKEN_RE simply failing to match it.
+    """
+    for ch in expr:
+        if ord(ch) < 128:
+            continue
+        category = unicodedata.category(ch)
+        if (
+            ch.isdigit()
+            or ch.isalpha()
+            or ch.isnumeric()
+            or category in ("Nd", "No")
+            or category.startswith("L")
+        ):
+            raise GrammarError(f"disallowed character in expression: {ch!r}")
+
+
 def _tokenize(expr):
     """Yield (group_name, matched_text) for every token in `expr`.
 
     Raises GrammarError for any character the tokenizer regex cannot match
     at all -- e.g. "{", "}", "[", "]", "@", or any other symbol outside the
-    calculator's grammar.
+    calculator's grammar -- and, before any of that (see
+    _check_ascii_only), for any non-ASCII letter, digit, or numeral, even
+    one that is only part of a larger token the regex would otherwise
+    match whole (e.g. the "²" inside "x²").
     """
+    _check_ascii_only(expr)
     pos = 0
     length = len(expr)
     while pos < length:

@@ -152,6 +152,20 @@
   `tests/test_evaluate_grammar.py`'s `.5x`/`2*.5` cases, which now assert
   the clean `"2"`/`"1"` instead of the previously-padded
   `"2.00000000000000"`/`"1.00000000000000"`.
+- A successful variable or function definition is now added to the history
+  (P32, owner revision 2026-11-14): after `{"expr": "a:=5"}` and then
+  `{"expr": "f(x):=x^2+1"}`, the last two entries of
+  `GET /api/calc/history` are `{"expr": "a:=5", "exact": "5", "decimal":
+  "5"}` and `{"expr": "f(x):=x^2+1", "exact": "x^2 + 1", "decimal": null}`
+  -- each the same `"exact"`/`"decimal"` its own evaluate response gave (a
+  function's `"exact"` is the caret-form body, matching the response, never
+  the stored `"**"` form). A definition rejected with a 400, such as
+  `{"expr": "pi:=3"}` (a reserved name) or a right-hand side with a
+  `domain_error` (e.g. `{"expr": "a:=1/0"}`), adds nothing to the history,
+  same rule a plain `evaluate()` failure already followed; `"ans"` is
+  unaffected, since it is only ever set from a plain evaluation (P26/S1,
+  P30), never a definition's right-hand side. Added
+  `tests/test_p32_definitions_in_history.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

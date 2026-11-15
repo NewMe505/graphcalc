@@ -6,6 +6,44 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P32 (2026-11-14, owner revision "definitions in history"): `graphcalc/
+  cli.py`, `tests/test_p32_definitions_in_history.py`. Before this fix,
+  `_handle_calc_evaluate`'s `"name:=expr"`/`"f(x):=expr"` definition
+  branches stored a successful result only in the HTTPServer's
+  `graphcalc.state.CalcState` (via `set_variable`/`set_function`), never in
+  the `graphcalc.history.HistoryStore` a plain `evaluate()` success is
+  appended to -- so `GET /api/calc/history` never showed a definition at
+  all, even right after one succeeded, and the planner notes flagged this
+  as a gap against P6/P30 (`ans` must stay tied to the last *plain*
+  result, which this fix does not change). Fix: both definition branches
+  now also call `_history_store(handler).append(...)` whenever
+  `result["exact"] is not None` (i.e. no `domain_error` on the right-hand
+  side) -- the same condition that already gates storing into
+  `CalcState` -- with `{"expr": <original "name:=expr"/"f(x):=expr"
+  text>, "exact": response["exact"], "decimal": response["decimal"]}`,
+  reading both fields off the `response` dict this handler is about to
+  send rather than off the raw `calc.evaluate` result, so for a function
+  definition the history entry's `"exact"` is the already-caret-converted
+  body (`"x^2 + 1"`), matching what the client actually saw, never the
+  stored `"**"` form. A rejected definition --
+  `names.check_not_constant`'s 400 (`"pi:=3"`, `"ans:=5"`) or a
+  `domain_error` right-hand side (`"a:=1/0"`) -- returns before either
+  branch's append runs, so it adds nothing, same rule a plain `evaluate()`
+  400/`domain_error` already followed. `"ans"` is untouched by this change:
+  `CalcState.set_ans` is still only ever called from the plain-evaluate
+  branch (P26/S1, P30), never from a definition's right-hand-side
+  evaluation, so defining a variable or function never changes what
+  `"ans"` recalls. Added `tests/test_p32_definitions_in_history.py`: the
+  F1 acceptance case itself (`"a:=5"` then `"f(x):=x^2+1"`, asserting the
+  last two history entries match each response's own `"exact"`/
+  `"decimal"` in order), the F2 case (`"pi:=3"` -> 400, history stays
+  empty), a multi-param function definition, that a defined variable is
+  still usable (and still substituted correctly) after being recorded in
+  history, and that a rejected redefinition of a reserved constant leaves
+  the history empty. Full suite: 282 passed, 4 skipped. No plan drift, no
+  design question: additive, two one-line `_history_store(handler).append`
+  calls inside existing branches, no change to `graphcalc/history.py`'s
+  interface or `graphcalc/state.py`.
 - P31 (2026-11-15, owner revision "clean exact for decimals"): `graphcalc/
   calc.py`, `graphcalc/numfmt.py`, `tests/test_p31_clean_decimal_exact.py`,
   `tests/test_evaluate_grammar.py`. Before this fix, `evaluate()`'s `exact`

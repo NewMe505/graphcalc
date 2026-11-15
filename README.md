@@ -126,7 +126,12 @@ The calculator's math goes through a JSON API, one endpoint per operation:
 - `GET /api/calc/history` -- 200 `{"history": [...]}`, oldest entry first.
   Every successful `POST /api/calc/evaluate` (no parse error, no
   `domain_error`) appends `{"expr", "exact", "decimal"}` to the history; a
-  400 or a `domain_error` result adds nothing.
+  400 or a `domain_error` result adds nothing. A successful `"name:=expr"`
+  or `"f(params):=expr"` definition appends to the history too, with the
+  same `"expr"`/`"exact"`/`"decimal"` its own evaluate response gave (the
+  function case's `"exact"` is the caret-form body, e.g. `"x^2 + 1"`); a
+  definition rejected with a 400 (a reserved name, e.g. `"pi:=3"`) adds
+  nothing, same as any other 400.
 - `DELETE /api/calc/history` -- clears the history, answers 200
   `{"history": []}`.
 - `ans` in an expression (e.g. `"ans*2"`) substitutes the exact value of
@@ -170,7 +175,10 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   200 with that error and also stores nothing. A non-ASCII character
   anywhere in the name or parameter list (e.g. `"x²:=4"`, `"a２:=1"`,
   `"f(x²):=1"`) is likewise rejected with 400 and stores nothing --
-  `GET /api/calc/vars` lists none of those names afterward.
+  `GET /api/calc/vars` lists none of those names afterward. A successful
+  definition -- one that stores a value -- is also appended to
+  `GET /api/calc/history`, with the exact `"expr"`/`"exact"`/`"decimal"`
+  its own 200 response gave; a rejected (400) definition is not.
 - `GET /api/calc/vars` -- 200 `{"variables": {name: exact}, "functions":
   {name: {"params": [...], "body": exact}}}` for everything defined so far,
   values and bodies both in caret form.
@@ -195,9 +203,13 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   curl -s http://127.0.0.1:8000/api/calc/vars
   # {"variables": {"a": "5"}, "functions": {"f": {"params": ["x"], "body": "x^2 + 1"}}}
 
+  curl -s http://127.0.0.1:8000/api/calc/history
+  # last two entries: {"expr": "a:=5", "exact": "5", "decimal": "5"},
+  # {"expr": "f(x):=x^2+1", "exact": "x^2 + 1", "decimal": null}
+
   curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
     -H "Content-Type: application/json" -d '{"expr": "pi:=3"}'
-  # {"error": "cannot redefine constant pi"}
+  # {"error": "cannot redefine constant pi"} -- not added to the history
   ```
 
 The Calculator tab (`tab-calculator`) is wired to that API, not just a

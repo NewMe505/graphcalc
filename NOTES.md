@@ -7,6 +7,61 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P9 (2026-11-15): disk-persisted state. `graphcalc/state.py`,
+  `graphcalc/history.py`, `graphcalc/cli.py`, `.gitignore`,
+  `tests/test_p9_state_persistence.py`.
+  - Schema: `graphcalc.state.CalcState` is now the single store for
+    `"variables"` (name -> exact str, plus a parallel `"variable_sreprs"`
+    map for P26/S2's srepr rebuild), `"functions"` (name ->
+    `{"params": [...], "body": str}`, plus `"function_sreprs"`), `"ans"`
+    (`{"exact": str, "srepr": str}` or absent), `"history"` (a plain list
+    of `{"expr", "exact", "decimal"}` entries, oldest first -- the same
+    shape `graphcalc.history.HistoryStore` already used), and `"lists"`
+    (name -> values; empty `{}` until P15 adds CRUD for it, kept here now
+    so this on-disk shape and `POST /api/state/reset` do not change again
+    then). `graphcalc.history.StateBackedHistoryStore` implements the
+    existing `HistoryStore` ABC on top of `CalcState.history()`/
+    `append_history()`/`clear_history()`, so one JSON file backs both
+    variables/functions and history.
+  - `--state PATH` (default `./graphcalc_state.json`) and `--in-memory`:
+    `graphcalc/cli.py`'s `main()` builds `CalcState(None if args.in_memory
+    else args.state)`; a path builds a `StateBackedHistoryStore` on top of
+    it, `--in-memory` builds a plain `InMemoryHistoryStore` instead, so
+    nothing ever touches disk. `CalcState._save()` writes atomically
+    (`tempfile.mkstemp` in the same directory, then `os.replace`) after
+    every change, with no path meaning `_save()` is a no-op -- so the
+    state file parses as valid JSON after every change (F2) and
+    `--in-memory` creates no file at all (part of F3).
+  - Bug #14 fix, load-time: `CalcState.__init__` never raises on a bad
+    state file -- missing, unreadable, invalid JSON, a non-object top
+    level, or any individual field of the wrong type (e.g. `"variables"`
+    stored as a string) all fall back to that field's own empty default
+    (`_coerce_dict`/`_coerce_list`) rather than propagating. A load
+    failure never writes; the next real change overwrites the garbage
+    with a valid file. Evaluation is never blocked by a corrupt file.
+  - `POST /api/state/reset` -> 200 `{"status": "reset"}` (F3):
+    `graphcalc/cli.py::_handle_state_reset` calls the new
+    `CalcState.reset()`, which empties variables, functions,
+    variable/function sreprs, lists, history and ans in one call and one
+    atomic `_save()` (not a sequence of partial writes), then calls
+    `history_store.clear()` too (needed for a `--in-memory` run's
+    `InMemoryHistoryStore`, which `CalcState.reset()` cannot reach; a
+    no-op for `StateBackedHistoryStore`, whose `clear()` just re-touches
+    the `"history"` `CalcState.reset()` already emptied).
+  - `.gitignore` now lists `graphcalc_state.json` (F4), proven directly by
+    `test_p9_gitignore_lists_state_file` reading `.gitignore` from the
+    repo root.
+  - Tested in `tests/test_p9_state_persistence.py`: F2 end-to-end through
+    a real server (define a variable, define a function, a plain
+    evaluation, a history clear, a full reset -- the file stays valid
+    JSON with the right keys after each); three bad-state-file shapes
+    (unparseable text, a JSON list at the top level, a JSON object with a
+    wrong-type field) each load without raising and still allow
+    evaluation; F1 through two real `python -m graphcalc --state S`
+    subprocesses in sequence on the same file; F3 through a real
+    `POST /api/state/reset` (both the API response and the file on disk)
+    and, separately, a real `--in-memory` subprocess proving reset writes
+    no file either; F4 as described above.
 - P32 (2026-11-14, owner revision "definitions in history"): `graphcalc/
   cli.py`, `tests/test_p32_definitions_in_history.py`. Before this fix,
   `_handle_calc_evaluate`'s `"name:=expr"`/`"f(x):=expr"` definition

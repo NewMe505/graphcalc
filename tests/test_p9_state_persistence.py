@@ -27,8 +27,12 @@ empties_everything proves the first half through graphcalc.cli.Handler's
 real route (_handle_state_reset); test_p9_state_reset_in_memory_creates_no_
 file proves the second half through a real `python -m graphcalc
 --in-memory` subprocess, the same way test_p9_restart_persists_variable
-proves F1 through a subprocess rather than an in-process injection. The
-.gitignore entry is still a later step of the same plan (P9).
+proves F1 through a subprocess rather than an in-process injection.
+
+F4 (PRODUCT.md, plan step P9/S4): "The repository's .gitignore lists
+graphcalc_state.json." test_p9_gitignore_lists_state_file proves this
+directly by reading .gitignore from the repository root and checking a
+stripped line matches exactly.
 """
 
 import json
@@ -415,3 +419,14 @@ def test_p9_state_reset_in_memory_creates_no_file(tmp_path):
         _stop_cli_subprocess(proc)
 
     assert list(tmp_path.iterdir()) == [], list(tmp_path.iterdir())
+
+
+# ---- F4: the repository's .gitignore lists graphcalc_state.json, the
+# default --state filename, so a real run never dirties `git status` ----
+
+
+def test_p9_gitignore_lists_state_file():
+    gitignore_path = pathlib.Path(__file__).resolve().parent.parent / ".gitignore"
+    lines = gitignore_path.read_text(encoding="utf-8").splitlines()
+    stripped = [line.strip() for line in lines]
+    assert "graphcalc_state.json" in stripped, stripped

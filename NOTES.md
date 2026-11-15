@@ -5,6 +5,32 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P30 (2026-11-14, owner revision "ans:=5 refused"): `graphcalc/names.py`,
+  `tests/test_p30_ans_reserved.py`. "ans" is not one of
+  `calc._rad_names()`'s constants/functions -- it gets its own dedicated,
+  non-variable storage slot in `graphcalc.state.CalcState`
+  (`set_ans`/`ans`/`clear_ans`), separate from the `variables` map -- so
+  before this step, `{"expr":"ans:=5"}` fell through to the ordinary
+  `"name:=expr"` path and silently stored a *second*, unrelated "ans" in
+  `CalcState.variables` (never read back, since `calc.evaluate` always
+  prefers the dedicated ans slot over a same-named stored variable) while
+  leaving the real stored answer untouched -- confusing, since the 200
+  response looked like a normal definition. Fix: one-line change,
+  `graphcalc.names.RESERVED_NAMES` now adds `"ans"` on top of
+  `_rad_names()` and `{"i", "oo", "nan"}`, so the existing
+  `check_not_constant(name)` call `cli._handle_calc_evaluate` already runs
+  for every `"name:=expr"`/`"f(params):=expr"` definition (before any
+  evaluation or storage) now also rejects "ans" -- 400
+  `{"error": "cannot redefine constant ans"}`, exactly like `"pi:=3"`.
+  Added `tests/test_p30_ans_reserved.py`: a direct unit test on
+  `check_not_constant("ans")`, the F1 acceptance case itself (`"2+2"` then
+  `"ans:=5"` -> 400, then `"ans"` still -> exact `"4"`), a check that the
+  rejected assignment left both `GET /api/calc/vars` (`{"variables": {},
+  "functions": {}}`) and `GET /api/calc/history` (still just the one
+  `"2+2"` entry) untouched, and `"ans(x):=1"` (function-definition syntax)
+  rejected the same way. Full suite still passes (see test run below). No
+  plan drift, no design question: purely additive, no existing caller of
+  `RESERVED_NAMES`/`check_not_constant` needed to change.
 - P28/S3 (2026-11-14, Bug #20 fix): docs/tests only, no code change.
   Acceptance text asks that `{"expr":"10^1000"}` "still" give decimal
   `"1e1000"` after S1/S2's guard and backstop landed -- it already did:

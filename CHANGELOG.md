@@ -123,6 +123,19 @@
   caller (today, `decimal` and `complex` in `graphcalc/calc.py`) gets the
   same behavior for free. Smaller magnitudes are unaffected. Added
   `tests/test_p25_scientific_notation.py`.
+- `"ans"` is now a reserved name (P30, owner revision 2026-11-14):
+  `{"expr": "ans:=5"}` answers 400 `{"error": "cannot redefine constant
+  ans"}`, same as `"pi:=3"`, and stores nothing -- the history and the real
+  `ans` slot (the last plain evaluation's result) are left exactly as they
+  were. `{"expr": "ans(x):=1"}` (function-definition syntax) is rejected the
+  same way. Concretely: after `{"expr": "2+2"}`, `{"expr": "ans:=5"}` is a
+  400 and a following `{"expr": "ans"}` still answers exact `"4"`, never
+  `"5"`. `graphcalc/names.py`'s `RESERVED_NAMES` now includes `"ans"`
+  alongside `graphcalc.calc._rad_names()` and `{"i", "oo", "nan"}`, so the
+  existing `check_not_constant("ans")` call every other
+  `"name:=expr"`/`"f(params):=expr"` definition already goes through
+  rejects it before any evaluation or storage happens. Added
+  `tests/test_p30_ans_reserved.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

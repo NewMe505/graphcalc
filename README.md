@@ -146,8 +146,11 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   function -- the same way `pi` or `ans` already are; calling a function
   with the wrong number of arguments is a 400, never a 500. Redefining a
   reserved constant or function name (`pi`, `e`, `E`, `I`, `i`, `oo`, `nan`,
-  or a built-in function name) answers 400
-  `{"error": "cannot redefine constant <name>"}` and stores nothing; a
+  `ans`, or a built-in function name) answers 400
+  `{"error": "cannot redefine constant <name>"}` and stores nothing --
+  `"ans:=5"` (or `"ans(x):=1"`) is rejected the same way, leaving the real
+  `ans` (the last plain evaluation's result) and the history both exactly
+  as they were. A
   right-hand side that answers a `domain_error` (e.g. `"a:=1/0"`) answers
   200 with that error and also stores nothing. A non-ASCII character
   anywhere in the name or parameter list (e.g. `"x²:=4"`, `"a２:=1"`,

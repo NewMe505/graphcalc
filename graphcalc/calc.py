@@ -365,7 +365,14 @@ def evaluate(
     need an unreasonable number of decimal digits to materialize exactly
     (plan step P28/S1, Bug #20 fix): letting sympy actually attempt that
     computation could freeze this calculator's single-threaded HTTP server
-    for every other request, for minutes or far longer.
+    for every other request, for minutes or far longer. The exact/decimal/
+    complex formatting below this docstring also has its own backstop
+    (plan step P28/S2, Bug #20 fix): a ValueError (Python's own int-to-str
+    digit limit, "Exceeds the limit (4300 digits)...") or an OverflowError
+    raised while building `exact`, `decimal` or `complex` -- for a result
+    that size is_power_too_large's own text-only estimate never flagged --
+    is caught there and reported as this same domain_error, never as the
+    raw exception text.
 
     `last_entry` is graphcalc.state.CalcState.ans() -- {"exact": str,
     "srepr": str} for the last successful plain evaluation, or None when
@@ -592,29 +599,51 @@ def evaluate(
     except Exception as exc:
         raise CalcError(f"invalid expression: {expr}") from exc
 
-    exact = exact_override if exact_override is not None else str(result)
+    exact = None
     decimal = None
     complex_value = None
     domain_error = None
 
-    # Check for a domain error before any formatting: a result with no
-    # value (a division by zero, or an indeterminate form) reports
-    # exact/decimal/complex as None instead of trying to format zoo/nan.
-    if result in _INFINITE_RESULTS:
-        domain_error = DOMAIN_ERROR_DIVISION_BY_ZERO
+    try:
+        exact = exact_override if exact_override is not None else str(result)
+
+        # Check for a domain error before any formatting: a result with no
+        # value (a division by zero, or an indeterminate form) reports
+        # exact/decimal/complex as None instead of trying to format zoo/nan.
+        if result in _INFINITE_RESULTS:
+            domain_error = DOMAIN_ERROR_DIVISION_BY_ZERO
+            exact = None
+        elif result is nan:
+            domain_error = DOMAIN_ERROR_UNDEFINED
+            exact = None
+        elif not result.free_symbols and getattr(result, "is_number", False):
+            re_part, im_part = N(result, 17).as_real_imag()
+            if im_part == 0:
+                decimal = format_decimal(result)
+            else:
+                complex_value = {
+                    "real": format_decimal(re_part),
+                    "imag": format_decimal(im_part),
+                }
+    except (ValueError, OverflowError):
+        # Backstop for graphcalc.limits.is_power_too_large's own estimate
+        # (plan step P28/S1) missing a result this large: that guard only
+        # ever looks at literal Pow nodes in `expr`'s own text, so a result
+        # that reaches the same astronomical size some other way -- a huge
+        # stored variable or "ans" referenced here, a factorial, or
+        # simplify() itself growing the value -- is never flagged there and
+        # falls through to this formatting code instead. str(result) on an
+        # Integer past sys.get_int_max_str_digits() raises exactly this
+        # ValueError ("Exceeds the limit (4300 digits)..."); N()/format_
+        # decimal's own float/Decimal conversions can raise either one for
+        # a similarly huge magnitude. Both become this exact same clean
+        # domain_error -- never the raw exception text, which is how the
+        # forbidden "Exceeds the limit" wording used to leak into a 400
+        # (plan step P28/S2, Bug #20 fix).
         exact = None
-    elif result is nan:
-        domain_error = DOMAIN_ERROR_UNDEFINED
-        exact = None
-    elif not result.free_symbols and getattr(result, "is_number", False):
-        re_part, im_part = N(result, 17).as_real_imag()
-        if im_part == 0:
-            decimal = format_decimal(result)
-        else:
-            complex_value = {
-                "real": format_decimal(re_part),
-                "imag": format_decimal(im_part),
-            }
+        decimal = None
+        complex_value = None
+        domain_error = DOMAIN_ERROR_TOO_LARGE
 
     # "_result_srepr": the srepr() this call's own result should be rebuilt
     # from, whether it is later recalled as "ans" (plan step P26/S1) or

@@ -107,15 +107,21 @@ _GLOBAL_DICT = {
 # (sys.get_int_max_str_digits(), 4300 on 3.11+): once a result's exact
 # Integer needs more digits than that, graphcalc.calc.evaluate's later
 # str(result) call -- used to build the "exact" field -- raises ValueError
-# ("Exceeds the limit (4300 digits)..."), which graphcalc.cli's catch-all
-# then turns into a 400 "unexpected error: Exceeds the limit..." -- exactly
-# the forbidden wording this plan step's acceptance criteria ban, and from
-# a result (2**20000, 6,021 digits) far smaller than this guard's earlier
-# 10**5 threshold let through. 4_000 keeps a comfortable margin below 4300
-# for this estimate's own float-arithmetic imprecision, while still
-# comfortably passing 10**1000 (1001 digits) and catching 2**20000 (~6,021
-# digits), 2**10000000 (~3,010,300 digits), 9**9**9 (~369,671,667 digits),
-# and 10**10**10 (10,000,000,000 digits).
+# ("Exceeds the limit (4300 digits)..."). Before plan step P28/S2's
+# formatting backstop (see the try/except around that str(result) call, and
+# the one around format_decimal, in graphcalc.calc.evaluate) existed, that
+# ValueError escaped all the way to graphcalc.cli's catch-all, which turned
+# it into a 400 "unexpected error: Exceeds the limit..." -- exactly the
+# forbidden wording this plan step's acceptance criteria ban, and from a
+# result (2**20000, 6,021 digits) far smaller than this guard's earlier
+# 10**5 threshold let through. This guard staying well below 4300 is still
+# the first line of defense -- it turns that case into a quick domain_error
+# before sympy's real parse_expr/simplify ever runs at all, rather than
+# relying on the backstop to catch it after the fact. 4_000 keeps a
+# comfortable margin below 4300 for this estimate's own float-arithmetic
+# imprecision, while still comfortably passing 10**1000 (1001 digits) and
+# catching 2**20000 (~6,021 digits), 2**10000000 (~3,010,300 digits),
+# 9**9**9 (~369,671,667 digits), and 10**10**10 (10,000,000,000 digits).
 MAX_POWER_DIGITS = 4_000
 
 

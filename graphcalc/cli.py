@@ -321,7 +321,7 @@ def _handle_calc_evaluate(handler):
             _state(handler).set_ans(result["exact"], ans_srepr)
         _send_json(handler, 200, result)
     except Exception as exc:  # catch-all: this endpoint must never answer with a 500
-        _send_json(handler, 400, {"error": f"unexpected error: {exc}"})
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
 class Handler(BaseHTTPRequestHandler):

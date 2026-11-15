@@ -24,7 +24,8 @@ import urllib.error
 import urllib.request
 from http.server import HTTPServer
 
-from graphcalc.calc import evaluate
+from graphcalc import calc
+from graphcalc.calc import DOMAIN_ERROR_TOO_LARGE, evaluate
 from graphcalc.cli import Handler
 
 # Generous relative to the 10-second acceptance budget, but still proves
@@ -164,6 +165,95 @@ def test_p28_10_to_the_1000_still_gives_decimal_1e1000_over_http():
         assert status == 200, body
         assert body["domain_error"] is None, body
         assert body["decimal"] == "1e1000", body
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+# ---- P28/S2: formatting backstop + raw-body check on 2^10000000 ----
+
+
+def test_p28_2_to_the_10000000_raw_response_body_has_no_forbidden_wording_over_http():
+    # Plan step P28/S2's own acceptance test: POST "2^10000000", confirm the
+    # reply lands well inside the 10-second budget, then scan the *raw*
+    # response bytes (never json.loads()'d first, unlike the other tests in
+    # this file) for either forbidden phrase -- proving neither string
+    # appears anywhere in the literal bytes sent back over HTTP, not just
+    # in whichever JSON values happen to get inspected.
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        data = json.dumps({"expr": "2^10000000"}).encode("utf-8")
+        req = urllib.request.Request(
+            base + "/api/calc/evaluate",
+            data=data,
+            headers={"Content-Type": "application/json"},
+            method="POST",
+        )
+        t0 = time.monotonic()
+        try:
+            with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as res:
+                status, raw = res.status, res.read()
+        except urllib.error.HTTPError as err:
+            status, raw = err.code, err.read()
+        elapsed = time.monotonic() - t0
+        assert elapsed < TIMEOUT_SECONDS, (elapsed, raw)
+        assert status in (200, 400), (status, raw)
+        text = raw.decode("utf-8")
+        assert "Exceeds the limit" not in text, text
+        assert "unexpected error" not in text, text
+    finally:
+        server.shutdown()
+        server.server_close()
+
+
+def test_p28_formatting_backstop_catches_value_error_when_guard_bypassed(monkeypatch):
+    # The S1 guard (graphcalc.limits.is_power_too_large) only ever looks at
+    # literal Pow nodes in `expr`'s own text, so it cannot be the *only*
+    # thing standing between an astronomically large result and Python's
+    # own int-to-str digit limit -- a result that reaches the same size
+    # some other way (a stored variable, "ans", a factorial chain, or
+    # simplify() itself growing the value) would never be flagged there.
+    # Disabling the guard directly (as if its own estimate had missed this
+    # case) proves graphcalc.calc.evaluate's formatting code has its own,
+    # independent backstop (plan step P28/S2, Bug #20 fix): the ValueError
+    # str(result) raises past sys.get_int_max_str_digits() ("Exceeds the
+    # limit...") is caught there too, and reported as the exact same clean
+    # domain_error, never the raw exception text.
+    monkeypatch.setattr(calc, "is_power_too_large", lambda expr: False)
+    t0 = time.monotonic()
+    result = calc.evaluate("2^10000000")
+    elapsed = time.monotonic() - t0
+    assert elapsed < TIMEOUT_SECONDS, elapsed
+    assert result["domain_error"] == DOMAIN_ERROR_TOO_LARGE, result
+    assert result["exact"] is None, result
+    assert result["decimal"] is None, result
+    assert result["complex"] is None, result
+    text = json.dumps(result)
+    assert "Exceeds the limit" not in text, result
+    assert "unexpected error" not in text, result
+
+
+def test_p28_server_catchall_error_text_has_no_unexpected_error_wording(monkeypatch):
+    # graphcalc.cli._handle_calc_evaluate's own catch-all (any exception
+    # calc.evaluate's own try/except does not cover) used to format its 400
+    # body as "unexpected error: <exc>" -- the exact forbidden wording this
+    # plan step's acceptance criteria ban. It is now "request failed: <exc>"
+    # instead. Forcing calc.evaluate itself to raise a plain RuntimeError --
+    # standing in for whatever unanticipated exception that catch-all exists
+    # to guard against -- drives it directly, rather than relying on it
+    # never firing in practice.
+    def _boom(*args, **kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(calc, "evaluate", _boom)
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "1+1"})
+        assert status == 400, body
+        assert "unexpected error" not in body.get("error", ""), body
+        assert "boom" in body.get("error", ""), body
     finally:
         server.shutdown()
         server.server_close()

@@ -2,6 +2,13 @@ body {
   margin: 0;
   padding: 0;
   font-family: sans-serif;
+  /* A result, value or error echoed from the server can be an arbitrarily
+     long unbroken run of digits (e.g. 10^1000's 1,001-digit exact value).
+     overflow-wrap is inherited, so this breaks such a run inside whatever
+     block holds it (history entry, variable/function list, error line) on
+     every tab, including tabs added later, instead of widening the page. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .tabs {

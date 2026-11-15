@@ -78,6 +78,11 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 - [ ] After {"expr":"a:=5"} and then {"expr":"f(x):=x^2+1"}, the last two entries of GET /api/calc/history have expr "a:=5" and "f(x):=x^2+1", each with the exact its evaluate response gave
 - [ ] A definition that returns 400, such as {"expr":"pi:=3"}, is not added to the history
 
+### P33: Bug #27 fix: a long result, value or error message never widens the page; long text wraps inside its own line on every tab.
+- [ ] After {"expr":"10^1000"} is evaluated on the Calculator tab, the page in a 1280 px wide window is no wider than the window (document.documentElement.scrollWidth <= window.innerWidth): the 1,001-digit history entry wraps
+- [ ] The same holds after {"expr":"a:=10^1000"} (the variable list), {"expr":"f(x):=x+10^1000"} (the function list), and a 400 whose error line echoes a long input (1,500 digits followed by "^^3")
+- [ ] GET /static/style.css sets overflow-wrap or word-break on body or .tab-panel, so long words break on every tab, including tabs built later
+
 ### P5: Non-real results return 200 with an exact form and a rectangular complex form {"real","imag"}. 200 with a domain_error only when the math has no value (1/0, 0/0). 400 for client mistakes: syntax, missing or invalid parameters, redefining a constant. An undefined name is a symbol (as on the TI-Nspire CAS); decimal is null while a free name remains.
 - [ ] {"expr":"sqrt(-4)"} returns 200 with exact "2*I" and complex {"real":"0","imag":"2"}; {"expr":"ln(-1)"} returns exact "I*pi" and complex {"real":"0","imag":"3.14159265359"}
 - [ ] {"expr":"1/0"} returns 200 with exact null, decimal null and domain_error "division by zero"

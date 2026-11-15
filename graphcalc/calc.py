@@ -49,9 +49,15 @@ from sympy.parsing.sympy_parser import (
     standard_transformations,
 )
 
-from graphcalc.grammar import GrammarError, _tokenize, called_names, check_grammar
+from graphcalc.grammar import (
+    GrammarError,
+    _tokenize,
+    called_names,
+    check_grammar,
+    normalize_numbers,
+)
 from graphcalc.limits import is_power_too_large
-from graphcalc.numfmt import format_decimal
+from graphcalc.numfmt import clean_float_exact, format_decimal
 
 # Deliberately NOT sympy's bundled implicit_multiplication_application: that
 # tuple opens with split_symbols, which breaks a multi-letter identifier such
@@ -349,10 +355,19 @@ def evaluate(
     """Parse and evaluate `expr`, returning the calc/evaluate response dict.
 
     Keys: expr, exact, decimal, complex, domain_error. `exact` is the
-    simplified result's str(). `decimal` is a 12-significant-digit string
-    for a real numeric result, else None. `complex` is a rectangular form
-    {"real": str, "imag": str}, each a 12-significant-digit string, when
-    the result has a nonzero imaginary part, else None.
+    simplified result's str() -- except when the result is itself a sympy
+    Float (a decimal literal such as "1.5" or "1e5", or any result that
+    stayed a Float through simplify), in which case `exact` is
+    graphcalc.numfmt.clean_float_exact(result) instead (plan step P31):
+    plain str() of a Float pads the mantissa out to its working precision
+    ("1.50000000000000", "100000.000000000"), and clean_float_exact strips
+    that padding so `exact` matches what was typed/computed ("1.5",
+    "100000"). A Rational (e.g. "1/3") or an Integer (e.g. 10**1000) is
+    never a Float, so each keeps plain str() unchanged -- `exact` "1/3"
+    stays a fraction, never a decimal. `decimal` is a 12-significant-digit
+    string for a real numeric result, else None. `complex` is a rectangular
+    form {"real": str, "imag": str}, each a 12-significant-digit string,
+    when the result has a nonzero imaginary part, else None.
 
     `domain_error` is None on success. When the math has no value -- a
     division by zero (1/0 -> zoo, or oo/-oo) or an indeterminate form
@@ -496,6 +511,20 @@ def evaluate(
         check_grammar(expr)
     except GrammarError as exc:
         raise CalcError(str(exc)) from exc
+    # Rewrite every NUMBER token check_grammar just approved into
+    # Python-safe text (plan step P29/S2, owner revision 2026-11-14):
+    # ".5"/"5."/"0005" are all grammar-accepted literals, as on a TI, but
+    # Python's own tokenizer -- what sympy's parse_expr and
+    # is_power_too_large's own second parse are both built on -- raises a
+    # plain SyntaxError on the leading-zero shape ("0005") specifically.
+    # Reassigning `expr` here (not just a local copy threaded into
+    # parse_expr alone) means every one of this function's remaining
+    # `expr`-text-based steps -- is_power_too_large just below,
+    # _referenced_names/called_names further down, the bare-"ans" fast
+    # path, and the response's own "expr" echo -- all agree on the same,
+    # Python-safe text, instead of the real parse seeing normalized digits
+    # while an earlier guard saw the original, un-normalized ones.
+    expr = normalize_numbers(expr)
 
     # Power-size guard (plan step P28/S1, Bug #20 fix): checked before any
     # of the real parsing below, including the "bare ans" fast path above
@@ -605,7 +634,21 @@ def evaluate(
     domain_error = None
 
     try:
-        exact = exact_override if exact_override is not None else str(result)
+        if exact_override is not None:
+            exact = exact_override
+        elif getattr(result, "is_Float", False):
+            # A decimal literal (or a result that stayed a Float through
+            # simplify, e.g. "1.5" or "1e5") -- plan step P31. sympy's own
+            # str() pads these out to their working precision
+            # ("1.50000000000000", "100000.000000000"); clean_float_exact
+            # strips that padding so `exact` matches what was typed/
+            # computed ("1.5", "100000") instead. Anything that is not a
+            # Float -- Rational, Integer, symbolic, zoo, nan -- keeps
+            # plain str(result) exactly as before, so "1/3" still reports
+            # exact "1/3".
+            exact = clean_float_exact(result)
+        else:
+            exact = str(result)
 
         # Check for a domain error before any formatting: a result with no
         # value (a division by zero, or an indeterminate form) reports

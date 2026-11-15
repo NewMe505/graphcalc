@@ -136,6 +136,36 @@
   `"name:=expr"`/`"f(params):=expr"` definition already goes through
   rejects it before any evaluation or storage happens. Added
   `tests/test_p30_ans_reserved.py`.
+- A decimal literal's `exact` is now clean (P31, owner revision
+  2026-11-14): `{"expr": "1.5"}` answers exact `"1.5"` and decimal `"1.5"`;
+  `{"expr": "1e5"}` answers exact `"100000"` instead of sympy's own
+  precision-padded `str(Float)` (`"1.50000000000000"`,
+  `"100000.000000000"`). New `graphcalc/numfmt.py::clean_float_exact(value)`
+  strips the trailing fractional zeros (and the trailing `"."` for an
+  integral value) from a sympy `Float`'s `str()`; `graphcalc/calc.py`'s
+  `evaluate` calls it for `exact` only when the result is actually a
+  `Float` -- a `Rational` (`{"expr": "1/3"}` still answers exact `"1/3"`,
+  never a decimal), an `Integer` (`10**1000` still answers exact as the
+  full 1001-digit integer and decimal `"1e1000"`, P25 unaffected), or a
+  symbolic result all keep plain `str(result)` exactly as before. Added
+  `tests/test_p31_clean_decimal_exact.py`; updated
+  `tests/test_evaluate_grammar.py`'s `.5x`/`2*.5` cases, which now assert
+  the clean `"2"`/`"1"` instead of the previously-padded
+  `"2.00000000000000"`/`"1.00000000000000"`.
+- A successful variable or function definition is now added to the history
+  (P32, owner revision 2026-11-14): after `{"expr": "a:=5"}` and then
+  `{"expr": "f(x):=x^2+1"}`, the last two entries of
+  `GET /api/calc/history` are `{"expr": "a:=5", "exact": "5", "decimal":
+  "5"}` and `{"expr": "f(x):=x^2+1", "exact": "x^2 + 1", "decimal": null}`
+  -- each the same `"exact"`/`"decimal"` its own evaluate response gave (a
+  function's `"exact"` is the caret-form body, matching the response, never
+  the stored `"**"` form). A definition rejected with a 400, such as
+  `{"expr": "pi:=3"}` (a reserved name) or a right-hand side with a
+  `domain_error` (e.g. `{"expr": "a:=1/0"}`), adds nothing to the history,
+  same rule a plain `evaluate()` failure already followed; `"ans"` is
+  unaffected, since it is only ever set from a plain evaluation (P26/S1,
+  P30), never a definition's right-hand side. Added
+  `tests/test_p32_definitions_in_history.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
@@ -272,3 +302,23 @@
   is always treated as "unknown" and let through unflagged.
   `{"expr":"10^1000"}` (1001 digits) still answers exact `"1000000...0"`
   and decimal `"1e1000"`.
+- Bug #27 (P33): a long result, value or error no longer widens the whole
+  page -- before this fix, `{"expr":"10^1000"}`'s 1,001-digit exact value
+  printed on one unbroken line in `#calc-history`, and the page scrolled
+  sideways instead of staying put (reported in issue #27 as 8,963px wide
+  in a 1280px window).
+  `graphcalc/static/style.css` now sets `overflow-wrap: anywhere` (and
+  `word-break: break-word` as a fallback) on `body`; inherited by every
+  `.tab-panel`, it breaks any unbroken run of characters the server
+  echoes back -- the same digit string in the history entry
+  (`{"expr":"10^1000"}`), the variable list (`{"expr":"a:=10^1000"}`), the
+  function list (`{"expr":"f(x):=x+10^1000"}`), and the error line (a 400
+  whose message echoes a long bad input) -- inside its own block instead
+  of widening `document.documentElement.scrollWidth` past
+  `window.innerWidth`. The rule is global (on `body`, not a per-tab
+  selector), so the Graphs, Lists & Statistics and CAS tabs inherit the
+  same protection for any long text added later. Added
+  `tests/test_p33_wrapping.py` (Playwright-driven: evaluates each case in
+  a real 1280x900 page and asserts `scrollWidth <= innerWidth`, plus a
+  plain static-content check that `style.css` sets `overflow-wrap` or
+  `word-break` on `body`/`.tab-panel`).

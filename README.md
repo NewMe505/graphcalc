@@ -31,9 +31,14 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   postfix `!` (e.g. `"5!"` gives exact `"120"`) and implied multiplication
   (e.g. `"2(3+1)^2"`). Answers 200 with
   `{"expr", "exact", "decimal", "complex", "domain_error"}`: `exact` is
-  sympy's simplified result as a string, `decimal` is a 12-significant-digit
-  string with no trailing zeros (e.g. `"1/3"` gives `"0.333333333333"`), and
-  `complex`/`domain_error` are `null` unless set. Once a value's magnitude
+  sympy's simplified result as a string -- clean for a decimal literal, with
+  no precision padding (`"1.5"` gives exact `"1.5"`, `"1e5"` gives exact
+  `"100000"`, not sympy's own padded `"1.50000000000000"`/
+  `"100000.000000000"`), while a rational result still prints as a fraction
+  (`"1/3"` gives exact `"1/3"`, never a decimal). `decimal` is a
+  12-significant-digit string with no trailing zeros (e.g. `"1/3"` gives
+  `"0.333333333333"`), and `complex`/`domain_error` are `null` unless set.
+  Once a value's magnitude
   needs more than 12 digits before the decimal point, `decimal` (and
   `complex`'s `real`/`imag`) switch to scientific notation instead --
   `"2^100"` gives `"1.26765060023e30"`, 12 significant digits, no trailing
@@ -89,6 +94,16 @@ The calculator's math goes through a JSON API, one endpoint per operation:
 
   curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
     -H "Content-Type: application/json" \
+    -d '{"expr": "1.5"}'
+  # {"expr": "1.5", "exact": "1.5", "decimal": "1.5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "1e5"}'
+  # {"expr": "1e5", "exact": "100000", "decimal": "100000", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
     -d '{"expr": "sqrt(-4)"}'
   # {"expr": "sqrt(-4)", "exact": "2*I", "decimal": null, "complex": {"real": "0", "imag": "2"}, "domain_error": null}
 
@@ -111,7 +126,12 @@ The calculator's math goes through a JSON API, one endpoint per operation:
 - `GET /api/calc/history` -- 200 `{"history": [...]}`, oldest entry first.
   Every successful `POST /api/calc/evaluate` (no parse error, no
   `domain_error`) appends `{"expr", "exact", "decimal"}` to the history; a
-  400 or a `domain_error` result adds nothing.
+  400 or a `domain_error` result adds nothing. A successful `"name:=expr"`
+  or `"f(params):=expr"` definition appends to the history too, with the
+  same `"expr"`/`"exact"`/`"decimal"` its own evaluate response gave (the
+  function case's `"exact"` is the caret-form body, e.g. `"x^2 + 1"`); a
+  definition rejected with a 400 (a reserved name, e.g. `"pi:=3"`) adds
+  nothing, same as any other 400.
 - `DELETE /api/calc/history` -- clears the history, answers 200
   `{"history": []}`.
 - `ans` in an expression (e.g. `"ans*2"`) substitutes the exact value of
@@ -155,7 +175,10 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   200 with that error and also stores nothing. A non-ASCII character
   anywhere in the name or parameter list (e.g. `"x²:=4"`, `"a２:=1"`,
   `"f(x²):=1"`) is likewise rejected with 400 and stores nothing --
-  `GET /api/calc/vars` lists none of those names afterward.
+  `GET /api/calc/vars` lists none of those names afterward. A successful
+  definition -- one that stores a value -- is also appended to
+  `GET /api/calc/history`, with the exact `"expr"`/`"exact"`/`"decimal"`
+  its own 200 response gave; a rejected (400) definition is not.
 - `GET /api/calc/vars` -- 200 `{"variables": {name: exact}, "functions":
   {name: {"params": [...], "body": exact}}}` for everything defined so far,
   values and bodies both in caret form.
@@ -180,9 +203,13 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   curl -s http://127.0.0.1:8000/api/calc/vars
   # {"variables": {"a": "5"}, "functions": {"f": {"params": ["x"], "body": "x^2 + 1"}}}
 
+  curl -s http://127.0.0.1:8000/api/calc/history
+  # last two entries: {"expr": "a:=5", "exact": "5", "decimal": "5"},
+  # {"expr": "f(x):=x^2+1", "exact": "x^2 + 1", "decimal": null}
+
   curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
     -H "Content-Type: application/json" -d '{"expr": "pi:=3"}'
-  # {"error": "cannot redefine constant pi"}
+  # {"error": "cannot redefine constant pi"} -- not added to the history
   ```
 
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
@@ -194,6 +221,17 @@ message on a 400 or a `domain_error` (e.g. `"1/0"` shows `"division by
 zero"`). All of it lives in `graphcalc/static/app.js`, using plain `fetch()`
 on relative paths -- no build step, no external resources -- and the page
 still only draws what those three endpoints return.
+
+A long result, value or error never widens the page: `graphcalc/static/
+style.css` sets `overflow-wrap: anywhere` (plus `word-break: break-word` for
+older browsers) on `body`, inherited by every tab panel, so an unbroken run
+of digits -- `"10^1000"`'s 1,001-digit exact value in `#calc-history`, the
+same value stored by `"a:=10^1000"` in `#calc-vars`, a function body such as
+`"f(x):=x+10^1000"`, or a bad expression long enough to echo into
+`#calc-error` -- wraps inside its own block instead of scrolling the whole
+page sideways. The rule lives on `body`, not on any one tab's elements, so
+the Graphs, Lists & Statistics and CAS tabs get the same protection for any
+long text they render later.
 
 ## Develop
 

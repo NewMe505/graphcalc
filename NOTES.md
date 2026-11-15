@@ -1,10 +1,111 @@
 # Notes
 
+- M4 Evaluator hardening: names, Unicode, freezes, literals merged by `scio build`: P27 failed, P27 passed, P28 passed, P29 skipped (reopened by the owner's 2026-11-15 revision and fixed in M5 -- see the P29/S1 and P29/S2 notes below), P30 passed; $13.4294.
 - M3 Evaluator grammar, naming and robustness fixes merged by `scio build`: P23 passed, P24 passed, P25 passed, P26 failed, P26 failed, P26 failed, P26 passed; $30.6874.
 - M2 Calculator errors, history, variables and tab UI merged by `scio build`: P5 passed, P6 passed, P7 failed, P7 passed, P8 failed, P8 passed; $17.0970.
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P32 (2026-11-14, owner revision "definitions in history"): `graphcalc/
+  cli.py`, `tests/test_p32_definitions_in_history.py`. Before this fix,
+  `_handle_calc_evaluate`'s `"name:=expr"`/`"f(x):=expr"` definition
+  branches stored a successful result only in the HTTPServer's
+  `graphcalc.state.CalcState` (via `set_variable`/`set_function`), never in
+  the `graphcalc.history.HistoryStore` a plain `evaluate()` success is
+  appended to -- so `GET /api/calc/history` never showed a definition at
+  all, even right after one succeeded, and the planner notes flagged this
+  as a gap against P6/P30 (`ans` must stay tied to the last *plain*
+  result, which this fix does not change). Fix: both definition branches
+  now also call `_history_store(handler).append(...)` whenever
+  `result["exact"] is not None` (i.e. no `domain_error` on the right-hand
+  side) -- the same condition that already gates storing into
+  `CalcState` -- with `{"expr": <original "name:=expr"/"f(x):=expr"
+  text>, "exact": response["exact"], "decimal": response["decimal"]}`,
+  reading both fields off the `response` dict this handler is about to
+  send rather than off the raw `calc.evaluate` result, so for a function
+  definition the history entry's `"exact"` is the already-caret-converted
+  body (`"x^2 + 1"`), matching what the client actually saw, never the
+  stored `"**"` form. A rejected definition --
+  `names.check_not_constant`'s 400 (`"pi:=3"`, `"ans:=5"`) or a
+  `domain_error` right-hand side (`"a:=1/0"`) -- returns before either
+  branch's append runs, so it adds nothing, same rule a plain `evaluate()`
+  400/`domain_error` already followed. `"ans"` is untouched by this change:
+  `CalcState.set_ans` is still only ever called from the plain-evaluate
+  branch (P26/S1, P30), never from a definition's right-hand-side
+  evaluation, so defining a variable or function never changes what
+  `"ans"` recalls. Added `tests/test_p32_definitions_in_history.py`: the
+  F1 acceptance case itself (`"a:=5"` then `"f(x):=x^2+1"`, asserting the
+  last two history entries match each response's own `"exact"`/
+  `"decimal"` in order), the F2 case (`"pi:=3"` -> 400, history stays
+  empty), a multi-param function definition, that a defined variable is
+  still usable (and still substituted correctly) after being recorded in
+  history, and that a rejected redefinition of a reserved constant leaves
+  the history empty. Full suite: 282 passed, 4 skipped. No plan drift, no
+  design question: additive, two one-line `_history_store(handler).append`
+  calls inside existing branches, no change to `graphcalc/history.py`'s
+  interface or `graphcalc/state.py`.
+- P31 (2026-11-15, owner revision "clean exact for decimals"): `graphcalc/
+  calc.py`, `graphcalc/numfmt.py`, `tests/test_p31_clean_decimal_exact.py`,
+  `tests/test_evaluate_grammar.py`. Before this fix, `evaluate()`'s `exact`
+  field for a decimal literal was always plain `str(result)`; sympy's own
+  `str()` of a `Float` pads the mantissa out to its working precision (15
+  decimal digits by default), so `{"expr":"1.5"}` answered exact
+  `"1.50000000000000"` instead of the clean `"1.5"` a TI-Nspire CAS user
+  typed, and `{"expr":"1e5"}` answered `"100000.000000000"` instead of
+  `"100000"`. Fix: new `graphcalc/numfmt.py::clean_float_exact(value)`
+  strips the trailing fractional zeros (and the trailing `"."` for an
+  integral value) from a `Float`'s `str()`, reusing the same mantissa/
+  exponent split `format_decimal`'s scientific-notation branch already
+  uses so the rare Float whose own `str()` is already in `e`-notation
+  (e.g. very small magnitudes) gets the same cleanup, re-printed with
+  `format_decimal`'s own exponent style (lowercase `e`, no `+`, no leading
+  zeros). `calc.evaluate` now branches on `result.is_Float` before
+  building `exact`: only a `Float` result goes through
+  `clean_float_exact`; a `Rational` (`"1/3"`), an `Integer` (`10**1000`),
+  or a symbolic result all keep plain `str(result)` exactly as before --
+  confirmed directly, not just by acceptance text, since this is the same
+  number handling P29 touched and the planner notes specifically asked to
+  recheck P3/P4/P5/P25/P28 (all still pass; `10^1000` still answers
+  decimal `"1e1000"`, P25's scientific threshold is on `Integer`, never a
+  `Float`, so it was never at risk). One existing-test fix, not drift: P29's
+  own `test_p29_accept_evaluate_mixed_implied_mult`/`_explicit_mult`
+  (`.5x` with `x:=4`, and `2*.5`) asserted the padded `"2.00000000000000"`/
+  `"1.00000000000000"` as *current* behavior, not as a spec requirement --
+  both results are Floats (`.5` is a decimal literal), so this fix changes
+  what they assert to the clean `"2"`/`"1"`, annotated in place with why.
+  Added `tests/test_p31_clean_decimal_exact.py`: the F1 cases (`"1.5"` ->
+  exact/decimal `"1.5"`, `"1e5"` -> exact `"100000"`), the F2 case (`"1/3"`
+  -> exact `"1/3"`), and a regression that `"10^1000"` still answers
+  decimal `"1e1000"`. Full suite: 272 passed, 4 skipped. No plan drift, no
+  design question: additive, formatting-only, one new branch in one
+  existing function.
+- P33 (2026-11-15, Bug #27 fix): `graphcalc/static/style.css`,
+  `tests/test_p33_wrapping.py`. Static files only, per the planner notes --
+  no touch to `graphcalc/static/app.js` or any server Python module. Root
+  cause per issue #27: no stylesheet rule anywhere gave the page a break
+  opportunity inside a long unbroken run of characters, so any server text
+  echoed verbatim into the DOM (a history entry's result, a variable's
+  value, a function's body, or an error line that echoes a long bad input)
+  widened its block and, with it, the whole page -- `{"expr":"10^1000"}`'s
+  1,001-digit exact value made the Calculator tab 8,963px wide in a 1280px
+  window. Fix: added `overflow-wrap: anywhere` (plus `word-break:
+  break-word` as a fallback for a browser that doesn't know
+  `overflow-wrap: anywhere`) to the existing `body` rule in `style.css`.
+  Deliberately on `body`, not on `#calc-history`/`#calc-vars`/`#calc-error`
+  individually, both because `.tab-panel` inherits it (CSS Grid/Flexbox note
+  from the planner -- min-width:0 on a flex/grid child -- turned out to be
+  moot here: `.tab-panel` is plain `display: block`, and `.tabs` is the only
+  flex container, holding short fixed-text tab buttons, not server-echoed
+  text) and because F3 asks for the rule on `body` or `.tab-panel` by name,
+  so every tab, including Graphs/Lists & Statistics/CAS which don't exist
+  yet, inherits the same protection for free. Added
+  `tests/test_p33_wrapping.py`: four Playwright-driven checks (real
+  Chromium, 1280x900 viewport, `document.documentElement.scrollWidth <=
+  window.innerWidth` after submitting each of F1/F2's four expressions) plus
+  one plain static-content regex check of `GET /static/style.css` for F3,
+  skipped via `pytest.importorskip("playwright.sync_api")` if Playwright
+  isn't installed. All five pass; full suite 236 passed, 1 skipped. No plan
+  drift, no design question.
 - P30 (2026-11-14, owner revision "ans:=5 refused"): `graphcalc/names.py`,
   `tests/test_p30_ans_reserved.py`. "ans" is not one of
   `calc._rad_names()`'s constants/functions -- it gets its own dedicated,

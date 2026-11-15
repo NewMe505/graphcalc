@@ -65,19 +65,24 @@ class GrammarError(Exception):
     """
 
 
-# Numbers: one or more digits, then an optional ".", with one or more
-# digits required after it, then an optional e-exponent -- stricter than
-# Python's own float grammar in both directions that matter here: a bare
-# leading dot (".5") or a bare trailing dot ("5.") is NOT in this pattern
-# (neither \d+ is optional), even though both are valid Python/sympy floats,
-# so ".5" and "5." are rejected by this gate too (known gap, not an
-# acceptance criterion P23 lists -- see NOTES.md). Checked against the
-# permissive NUMBER group's matched text below, so a Python-only suffix
-# (the "_" of "1_000", or the "j"/"J" of "2j"/"3J") is told apart from a
-# genuinely allowed number instead of silently splitting into an allowed
-# number token plus an allowed identifier token (e.g. "1_000" as NUMBER "1"
-# + IDENT "_000").
-_STRICT_NUMBER_RE = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
+# Numbers, as on a TI (owner revision, 2026-11-14/2026-11-15, plan step
+# P29/S2): a run of digits with an optional decimal point somewhere in it,
+# then an optional e-exponent. Either side of the point may be empty, but
+# not both -- ".5" and "5." are both accepted (one bare dot alone, "."
+# itself, has digits on neither side and is still rejected), and so is a
+# leading-zero run of digits such as "0005", since \d+ places no limit on
+# what those digits are. What stays rejected is exactly the shape the
+# owner's 2026-11-15 revision calls out: a *second* "." anywhere in the
+# literal ("1.2.3", "1..2", the trailing ".2" of "1.5e3.2") never matches
+# either alternative below, because each one allows only one "." total.
+# Checked against the permissive NUMBER group's matched text below, so a
+# Python-only suffix (the "_" of "1_000", or the "j"/"J" of "2j"/"3J") is
+# told apart from a genuinely allowed number instead of silently splitting
+# into an allowed number token plus an allowed identifier token (e.g.
+# "1_000" as NUMBER "1" + IDENT "_000"). normalize_numbers() (below) then
+# rewrites whatever this regex accepts into text Python's own tokenizer can
+# actually compile -- see its own docstring for why that extra step exists.
+_STRICT_NUMBER_RE = re.compile(r"^(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$")
 
 # Tried in this order -- longest/most specific alternative first -- so a
 # multi-character token is never misread as two shorter ones:
@@ -95,12 +100,38 @@ _STRICT_NUMBER_RE = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
 # multiplication by a name that happens to start with "j"/"J" -- "2job",
 # "3Jane" -- instead stops NUMBER at "2"/"3" and leaves "job"/"Jane" to match
 # IDENT, exactly like "2x" or "2y" does.
+#
+# NUMBER itself reads as the longest run of digits and dots (owner revision,
+# 2026-11-15, plan step P29/S1): it may start with either a digit or a bare
+# "." (so a later, still-unwidened _STRICT_NUMBER_RE below is the thing that
+# tells ".5"/"5." apart from "1.2.3"/"1..2"/"."), then greedily consumes a
+# run of "[\d._]" -- digits, dots and underscores together, not just
+# digits -- so a second "." right after the first is swallowed into the
+# same token instead of starting a second NUMBER match. Without this, "1.2"
+# would stop there and leave a bare ".3" for the regex to retry from
+# scratch; since a bare "." is not (yet) its own token, the *old* pattern
+# happened to reject that specific case too, but only by accident, via the
+# tokenizer's generic "disallowed character" fallback on the stray ".": once
+# a leading "." becomes legal (so NUMBER can match ".3" on its own), that
+# accident stops working and "1.2.3" would instead silently tokenize as two
+# NUMBERs side by side -- read as the implied product "1.2 * .3" -- which is
+# exactly the regression this longest-run rule exists to prevent. The
+# optional exponent is widened to match: "[eE][+-]?" followed by its own run
+# of "[\d._]" (at least one character, same as the plain digit run the old
+# pattern required there), so the trailing ".2" of "1.5e3.2" is absorbed
+# into the very same token rather than left over as a second one. Requiring
+# at least one character after "e"/"E" is what keeps implied multiplication
+# by a name starting with "e" working ("2ex" still stops NUMBER at "2" and
+# leaves "ex" to match IDENT, exactly like "2pi" stops at "2" and leaves
+# "pi"), and is also why "2pi" is unaffected: "p" matches neither "[\d._]"
+# nor the "e"/"E" lookahead that starts the exponent, so NUMBER still stops
+# at "2" either way. Last comes the existing optional j/J suffix, unchanged.
 _TOKEN_RE = re.compile(
     r"""
     (?P<HEX>0[xX][0-9a-fA-F]+)
   | (?P<BIN>0[bB][01]+)
   | (?P<OCT>0[oO][0-7]+)
-  | (?P<NUMBER>\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?(?:[jJ](?!\w))?)
+  | (?P<NUMBER>[\d.][\d._]*(?:[eE][+-]?[\d._]+)?(?:[jJ](?!\w))?)
   | (?P<IDENT>[A-Za-z_]\w*)
   | (?P<ASSIGN>:=)
   | (?P<LE><=)
@@ -324,3 +355,99 @@ def check_grammar(expr: str) -> None:
             and _has_top_level_comma(tokens, index + 1)
         ):
             raise GrammarError(f"too many arguments to {text}")
+
+
+# Splits a NUMBER token _STRICT_NUMBER_RE has already accepted into its four
+# pieces -- the digits before the point, the point itself, the digits after
+# it, and the e-exponent -- each optional on its own (never all absent at
+# once; that is exactly what _STRICT_NUMBER_RE itself refuses to match), so
+# _normalize_number_literal can rebuild the pieces Python's tokenizer needs
+# without re-deriving the same digit-and-dot structure a second time.
+_NUMBER_PARTS_RE = re.compile(r"^(?P<int>\d*)(?P<dot>\.)?(?P<frac>\d*)(?P<exp>[eE][+-]?\d+)?$")
+
+
+def _normalize_number_literal(text: str) -> str:
+    """Rewrite one grammar-approved NUMBER token into Python-safe text.
+
+    Python's own tokenizer accepts a bare leading dot (".5") and a bare
+    trailing dot ("5.") exactly as sympy's parse_expr does -- neither needs
+    rewriting to parse -- but it raises a SyntaxError on a leading-zero
+    integer literal ("0005": "leading zeros in decimal integer literals are
+    not permitted"), confirmed directly against this Python's own
+    parse_expr, not assumed. This function's real job is dodging that one
+    case; the ".5"/"5." rewrites below are done anyway, for every literal
+    shape _STRICT_NUMBER_RE accepts, so normalize_numbers' output is always
+    an ordinary digits-point-digits literal, never one with an empty side,
+    regardless of which accepted shape the user actually typed.
+
+    `text` is assumed to already satisfy _STRICT_NUMBER_RE (check_grammar's
+    own job, run first); a `text` that does not match _NUMBER_PARTS_RE's
+    looser digit/dot/exponent shape at all -- e.g. one of the owner's
+    2026-11-15 malformed examples, "1.2.3" -- is returned unchanged rather
+    than mangled, since check_grammar would have already rejected it before
+    normalize_numbers ever runs on real input.
+    """
+    match = _NUMBER_PARTS_RE.match(text)
+    if match is None:
+        return text
+    integer_part = match.group("int") or ""
+    dot = match.group("dot") or ""
+    frac_part = match.group("frac") or ""
+    exp_part = match.group("exp") or ""
+
+    if integer_part:
+        # "0005" -> "5"; "0" and "00" both collapse to the single digit "0",
+        # never to "" -- an empty integer part would only be correct when a
+        # "." follows (the ".5" case, handled by the next branch instead).
+        integer_part = integer_part.lstrip("0") or "0"
+    elif dot:
+        # A leading "." with nothing before it (".5") gets an explicit "0"
+        # in front, exactly as the plan step asks.
+        integer_part = "0"
+
+    if dot and not frac_part:
+        # A bare trailing "." with nothing after it ("5.", or the "5." of
+        # "5.e3") gets an explicit "0" after it, so the dot is never left
+        # dangling between two non-digits.
+        frac_part = "0"
+
+    return integer_part + dot + frac_part + exp_part
+
+
+def normalize_numbers(expr: str) -> str:
+    """Rewrite every NUMBER token in `expr` into Python-safe text (plan
+    step P29/S2).
+
+    graphcalc.calc.evaluate calls this on the string check_grammar has
+    already approved, before handing it to sympy's parse_expr: check_grammar
+    only ever confirms a NUMBER token's *shape* is one this grammar accepts
+    (_STRICT_NUMBER_RE), never rewrites the token itself, and some shapes it
+    accepts -- a leading-zero digit run such as "0005" -- raise a plain
+    Python SyntaxError once parse_expr's own tokenizer sees them, rather
+    than the clean 400 a malformed expression gets. Rewriting ahead of that
+    call turns "0005" into "5", so parse_expr sees exactly the same literal
+    a user who had typed "5" in the first place would have produced, and
+    does the same normalization to ".5" -> "0.5" and "5." -> "5.0" even
+    though Python's tokenizer already accepts those two shapes unchanged
+    (confirmed directly), simply so every NUMBER token this function
+    produces has the same digits-point-digits shape, never an empty side.
+
+    Reuses _TOKEN_RE directly (not _tokenize, which raises on a character
+    outside the grammar -- never expected here, since this only ever runs on
+    a string check_grammar has already accepted) via finditer, so every
+    character between two matched tokens -- always whitespace, for the same
+    reason -- is copied through untouched rather than collapsed; only a
+    NUMBER-group match's own text is ever rewritten, via
+    _normalize_number_literal.
+    """
+    pieces = []
+    last_end = 0
+    for match in _TOKEN_RE.finditer(expr):
+        pieces.append(expr[last_end : match.start()])
+        text = match.group()
+        if match.lastgroup == "NUMBER":
+            text = _normalize_number_literal(text)
+        pieces.append(text)
+        last_end = match.end()
+    pieces.append(expr[last_end:])
+    return "".join(pieces)

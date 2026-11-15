@@ -95,12 +95,38 @@ _STRICT_NUMBER_RE = re.compile(r"^\d+(\.\d+)?([eE][+-]?\d+)?$")
 # multiplication by a name that happens to start with "j"/"J" -- "2job",
 # "3Jane" -- instead stops NUMBER at "2"/"3" and leaves "job"/"Jane" to match
 # IDENT, exactly like "2x" or "2y" does.
+#
+# NUMBER itself reads as the longest run of digits and dots (owner revision,
+# 2026-11-15, plan step P29/S1): it may start with either a digit or a bare
+# "." (so a later, still-unwidened _STRICT_NUMBER_RE below is the thing that
+# tells ".5"/"5." apart from "1.2.3"/"1..2"/"."), then greedily consumes a
+# run of "[\d._]" -- digits, dots and underscores together, not just
+# digits -- so a second "." right after the first is swallowed into the
+# same token instead of starting a second NUMBER match. Without this, "1.2"
+# would stop there and leave a bare ".3" for the regex to retry from
+# scratch; since a bare "." is not (yet) its own token, the *old* pattern
+# happened to reject that specific case too, but only by accident, via the
+# tokenizer's generic "disallowed character" fallback on the stray ".": once
+# a leading "." becomes legal (so NUMBER can match ".3" on its own), that
+# accident stops working and "1.2.3" would instead silently tokenize as two
+# NUMBERs side by side -- read as the implied product "1.2 * .3" -- which is
+# exactly the regression this longest-run rule exists to prevent. The
+# optional exponent is widened to match: "[eE][+-]?" followed by its own run
+# of "[\d._]" (at least one character, same as the plain digit run the old
+# pattern required there), so the trailing ".2" of "1.5e3.2" is absorbed
+# into the very same token rather than left over as a second one. Requiring
+# at least one character after "e"/"E" is what keeps implied multiplication
+# by a name starting with "e" working ("2ex" still stops NUMBER at "2" and
+# leaves "ex" to match IDENT, exactly like "2pi" stops at "2" and leaves
+# "pi"), and is also why "2pi" is unaffected: "p" matches neither "[\d._]"
+# nor the "e"/"E" lookahead that starts the exponent, so NUMBER still stops
+# at "2" either way. Last comes the existing optional j/J suffix, unchanged.
 _TOKEN_RE = re.compile(
     r"""
     (?P<HEX>0[xX][0-9a-fA-F]+)
   | (?P<BIN>0[bB][01]+)
   | (?P<OCT>0[oO][0-7]+)
-  | (?P<NUMBER>\d[\d_]*(?:\.[\d_]*)?(?:[eE][+-]?\d+)?(?:[jJ](?!\w))?)
+  | (?P<NUMBER>[\d.][\d._]*(?:[eE][+-]?[\d._]+)?(?:[jJ](?!\w))?)
   | (?P<IDENT>[A-Za-z_]\w*)
   | (?P<ASSIGN>:=)
   | (?P<LE><=)

@@ -1,0 +1,25 @@
+{
+ "number": 6,
+ "title": "Disk-persisted state and graph plot/window API",
+ "branch": "milestone/6",
+ "features": [
+  {
+   "id": "P9",
+   "tier": "T1",
+   "notes": "State store writing atomically (temp file + os.replace) to --state PATH, default ./graphcalc_state.json, loaded on startup; --in-memory never touches disk. Holds variables, functions, history and an empty lists dict for P15. Add POST /api/state/reset and .gitignore entry. A bad state file must not break evaluation (bug #14). Test by restarting a server subprocess.",
+   "depends_on": null
+  },
+  {
+   "id": "P10",
+   "tier": "T1",
+   "notes": "New graph module plus route POST /api/graph/plot. Reuse the calculator grammar and safeguards (no sympy constructors, freeze guard); x is the free variable. Non-real, inf and nan become null. Fixed distinct colors for f1-f4. Validate window and bounded samples with 400s.",
+   "depends_on": null
+  },
+  {
+   "id": "P11",
+   "tier": "T0",
+   "notes": "POST /api/graph/window in the same graph module. Zoom about the window center. Return plain numbers (ints when whole). 400 for unknown action or bad numbers.",
+   "depends_on": null
+  }
+ ]
+}

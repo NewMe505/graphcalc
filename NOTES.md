@@ -5,6 +5,61 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P28/S3 (2026-11-14, Bug #20 fix): docs/tests only, no code change.
+  Acceptance text asks that `{"expr":"10^1000"}` "still" give decimal
+  `"1e1000"` after S1/S2's guard and backstop landed -- it already did:
+  `graphcalc/numfmt.py::format_decimal` has built its scientific-notation
+  branch from sympy's own `N()`/`Decimal` since P25, never from a plain
+  `float()` call, so a magnitude past `sys.float_info.max`
+  (`~1.7976931348623157e308`, where `float(Integer(10)**400)` would itself
+  raise `OverflowError`) was never actually at risk -- confirmed by direct
+  reading, not assumed. Added
+  `test_format_decimal_past_float_range_builds_scientific_form_without_float`
+  (`Integer(10)**400` -> `"1e400"`, `Integer(10)**1000` -> `"1e1000"`, and
+  the negative case `-1e1000`), a stripping/sign check
+  (`test_format_decimal_past_float_range_strips_trailing_zeros_and_dot`,
+  also pinning a non-power-of-ten mantissa, `12 * 10**3990` ->
+  `"1.2e3991"`), and a small-magnitude regression guard
+  (`test_format_decimal_existing_small_number_result_unaffected`) to
+  `tests/test_p28_freeze.py`. `test_p28_10_to_the_1000_still_gives_decimal_
+  1e1000`/`..._over_http` (already added in S1) continue to cover the
+  acceptance expr itself. No plan drift, no design question.
+- P28/S2 (2026-11-14, Bug #20 fix): `graphcalc/calc.py`, `graphcalc/cli.py`,
+  `graphcalc/limits.py` (comments only), `tests/test_p28_freeze.py`. S1's
+  `is_power_too_large` guard only ever sizes up a literal `Pow` node in
+  `expr`'s own text, so `{"expr":"2^10000000"}` (~3,010,300 digits, well
+  past `MAX_POWER_DIGITS`) was already caught there -- but that guard is
+  not the *only* way a result can get that large: a stored variable or
+  "ans" used as a base/exponent, a factorial chain, or `simplify()` itself
+  growing a value are all invisible to a text-only pre-check, and the
+  resulting `str(result)` past `sys.get_int_max_str_digits()` (4300) raises
+  Python's own `ValueError` ("Exceeds the limit (4300 digits)...") --
+  `graphcalc.cli`'s catch-all then wrapped that as `"unexpected error:
+  Exceeds the limit..."`, exactly the wording this plan step's acceptance
+  criteria ban, regardless of a 200/400 status. Fix, two parts: (1) wrapped
+  `calc.evaluate`'s `exact`/`decimal`/`complex` formatting block (the
+  `str(result)` call and the `N()`/`format_decimal` calls that follow it)
+  in its own `try/except (ValueError, OverflowError)`, reporting the same
+  `DOMAIN_ERROR_TOO_LARGE` ("result too large to compute") domain_error
+  used for a guard-caught power, never the raw exception text -- a true
+  backstop, independent of S1's guard ever firing at all (verified directly:
+  `test_p28_formatting_backstop_catches_value_error_when_guard_bypassed`
+  monkeypatches `calc.is_power_too_large` to always return `False` and
+  confirms `{"expr":"2^10000000"}` still answers the clean domain_error
+  within budget, never the raw `ValueError` text). (2) `graphcalc.cli`'s own
+  catch-all message changed from `"unexpected error: {exc}"` to `"request
+  failed: {exc}"` as a second line of defense for any other exception this
+  handler did not anticipate (`test_p28_server_catchall_error_text_has_no_
+  unexpected_error_wording` forces `calc.evaluate` to raise a plain
+  `RuntimeError` and confirms the word "unexpected" never appears). Also
+  added `test_p28_2_to_the_10000000_raw_response_body_has_no_forbidden_
+  wording_over_http`, which scans the *raw* HTTP response bytes (never
+  `json.loads()`'d first) for either forbidden phrase, so the check covers
+  the literal bytes sent over the wire, not just whichever JSON field
+  happens to get inspected. `graphcalc/limits.py` itself is unchanged code
+  (comments only, explaining why `MAX_POWER_DIGITS` staying well below 4300
+  is still the first line of defense even with this backstop in place).
+  No plan drift, no design question.
 - P28/S1 attempt 2 (2026-11-14, Bug #20 fix): fixed a regression attempt 1's
   `graphcalc/limits.py::is_power_too_large()` introduced in
   `test_p24_multiletter_sec_deg_no_constant` and

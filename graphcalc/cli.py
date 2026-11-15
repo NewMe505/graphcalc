@@ -234,7 +234,20 @@ def _handle_calc_evaluate(handler):
     Everything above is wrapped in a catch-all: any exception this function
     did not anticipate (e.g. something calc.evaluate's own try/except does
     not cover) is still turned into a JSON 400, never left to propagate into
-    a 500. This handler must never answer with a 500.
+    a 500. This handler must never answer with a 500. The catch-all's own
+    message is "request failed: <exc>", not "unexpected error: <exc>" (plan
+    step P28/S2, Bug #20 fix): before that fix, a result just past calc.
+    evaluate's own is_power_too_large guard (e.g. "2^20000") could still
+    raise Python's int-to-str ValueError ("Exceeds the limit (4300
+    digits)...") on the way out, which this catch-all then wrapped as
+    "unexpected error: Exceeds the limit (4300 digits)..." -- exactly the
+    wording this product's acceptance criteria ban from ever appearing in a
+    response. calc.evaluate now catches that ValueError/OverflowError itself
+    and reports the same "result too large to compute" domain_error instead
+    (see calc.evaluate's own docstring), so this catch-all should no longer
+    ever see that particular exception at all; the wording changed anyway,
+    as a second line of defense for any other exception this handler did
+    not anticipate.
     """
     from graphcalc import calc, names
 

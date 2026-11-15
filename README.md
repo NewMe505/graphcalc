@@ -49,7 +49,17 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   A result with no value answers 200 with `exact`, `decimal` and `complex`
   all `null` and `domain_error` set instead: `"division by zero"` for a
   division by zero (`"1/0"`), or a non-null message for an indeterminate
-  form (`"0/0"`). An undefined name parses as a free symbol, as on the
+  form (`"0/0"`). A power whose exact result would take an unreasonable
+  number of decimal digits to compute -- a tower such as `"9^9^9"` or
+  `"10^10^10"`, or a huge exponent such as `"2^10000000"` -- is sized up
+  from the expression's text alone, before sympy ever tries to compute it,
+  and also answers 200 with `domain_error: "result too large to compute"`
+  instead of blocking the server: each still answers within a few seconds,
+  and a later request (e.g. `"1+1"`) is answered normally, never left
+  waiting behind it. A power that is merely large but still exact, such as
+  `"10^1000"`, is unaffected -- it still answers `exact` (a 1001-digit
+  integer) and `decimal` `"1e1000"`, same as always. An undefined name
+  parses as a free symbol, as on the
   TI-Nspire CAS (`"2x"` gives exact `"2*x"`); a multi-letter name such as
   `"rate"` or `"xy"` is always one symbol, never split into letters, so an
   `e`, `E` or `I` that merely appears inside a longer name never becomes a
@@ -91,6 +101,11 @@ The calculator's math goes through a JSON API, one endpoint per operation:
     -H "Content-Type: application/json" \
     -d '{"expr": "2^100"}'
   # {"expr": "2^100", "exact": "1267650600228229401496703205376", "decimal": "1.26765060023e30", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "9^9^9"}'
+  # {"expr": "9^9^9", "exact": null, "decimal": null, "complex": null, "domain_error": "result too large to compute"}
   ```
 
 - `GET /api/calc/history` -- 200 `{"history": [...]}`, oldest entry first.

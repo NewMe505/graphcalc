@@ -31,9 +31,14 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   postfix `!` (e.g. `"5!"` gives exact `"120"`) and implied multiplication
   (e.g. `"2(3+1)^2"`). Answers 200 with
   `{"expr", "exact", "decimal", "complex", "domain_error"}`: `exact` is
-  sympy's simplified result as a string, `decimal` is a 12-significant-digit
-  string with no trailing zeros (e.g. `"1/3"` gives `"0.333333333333"`), and
-  `complex`/`domain_error` are `null` unless set. Once a value's magnitude
+  sympy's simplified result as a string -- clean for a decimal literal, with
+  no precision padding (`"1.5"` gives exact `"1.5"`, `"1e5"` gives exact
+  `"100000"`, not sympy's own padded `"1.50000000000000"`/
+  `"100000.000000000"`), while a rational result still prints as a fraction
+  (`"1/3"` gives exact `"1/3"`, never a decimal). `decimal` is a
+  12-significant-digit string with no trailing zeros (e.g. `"1/3"` gives
+  `"0.333333333333"`), and `complex`/`domain_error` are `null` unless set.
+  Once a value's magnitude
   needs more than 12 digits before the decimal point, `decimal` (and
   `complex`'s `real`/`imag`) switch to scientific notation instead --
   `"2^100"` gives `"1.26765060023e30"`, 12 significant digits, no trailing
@@ -86,6 +91,16 @@ The calculator's math goes through a JSON API, one endpoint per operation:
     -H "Content-Type: application/json" \
     -d '{"expr": "1/3+1/6"}'
   # {"expr": "1/3+1/6", "exact": "1/2", "decimal": "0.5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "1.5"}'
+  # {"expr": "1.5", "exact": "1.5", "decimal": "1.5", "complex": null, "domain_error": null}
+
+  curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
+    -H "Content-Type: application/json" \
+    -d '{"expr": "1e5"}'
+  # {"expr": "1e5", "exact": "100000", "decimal": "100000", "complex": null, "domain_error": null}
 
   curl -s -X POST http://127.0.0.1:8000/api/calc/evaluate \
     -H "Content-Type: application/json" \

@@ -355,10 +355,19 @@ def evaluate(
     """Parse and evaluate `expr`, returning the calc/evaluate response dict.
 
     Keys: expr, exact, decimal, complex, domain_error. `exact` is the
-    simplified result's str(). `decimal` is a 12-significant-digit string
-    for a real numeric result, else None. `complex` is a rectangular form
-    {"real": str, "imag": str}, each a 12-significant-digit string, when
-    the result has a nonzero imaginary part, else None.
+    simplified result's str() -- except when the result is itself a sympy
+    Float (a decimal literal such as "1.5" or "1e5", or any result that
+    stayed a Float through simplify), in which case `exact` is
+    graphcalc.numfmt.clean_float_exact(result) instead (plan step P31):
+    plain str() of a Float pads the mantissa out to its working precision
+    ("1.50000000000000", "100000.000000000"), and clean_float_exact strips
+    that padding so `exact` matches what was typed/computed ("1.5",
+    "100000"). A Rational (e.g. "1/3") or an Integer (e.g. 10**1000) is
+    never a Float, so each keeps plain str() unchanged -- `exact` "1/3"
+    stays a fraction, never a decimal. `decimal` is a 12-significant-digit
+    string for a real numeric result, else None. `complex` is a rectangular
+    form {"real": str, "imag": str}, each a 12-significant-digit string,
+    when the result has a nonzero imaginary part, else None.
 
     `domain_error` is None on success. When the math has no value -- a
     division by zero (1/0 -> zoo, or oo/-oo) or an indeterminate form

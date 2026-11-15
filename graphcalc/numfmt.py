@@ -1,9 +1,14 @@
-"""Shared decimal formatter: positional notation, N significant digits.
+"""Shared number formatters: decimal notation and clean exact text.
 
-Used anywhere a result needs a 12-significant-digit decimal string instead
-of sympy's exact symbolic form -- the calculator, the grapher, stats and
-regression all share this one routine so "12 significant digits, no
-trailing zeros, no exponent notation" means the same thing everywhere.
+`format_decimal` renders a value as a 12-significant-digit decimal string
+instead of sympy's exact symbolic form -- the calculator, the grapher,
+stats and regression all share this one routine so "12 significant
+digits, no trailing zeros, no exponent notation" means the same thing
+everywhere. `clean_float_exact` renders a sympy ``Float`` as a clean,
+un-padded decimal string for the separate `exact` field (plan step P31) --
+a different job (no rounding, no significant-digit limit), but kept in
+this module since both exist to make a number read the way a user typed
+or expects it, not the way sympy's own str()/N() happens to print it.
 """
 
 from decimal import Decimal, localcontext

@@ -136,6 +136,22 @@
   `"name:=expr"`/`"f(params):=expr"` definition already goes through
   rejects it before any evaluation or storage happens. Added
   `tests/test_p30_ans_reserved.py`.
+- A decimal literal's `exact` is now clean (P31, owner revision
+  2026-11-14): `{"expr": "1.5"}` answers exact `"1.5"` and decimal `"1.5"`;
+  `{"expr": "1e5"}` answers exact `"100000"` instead of sympy's own
+  precision-padded `str(Float)` (`"1.50000000000000"`,
+  `"100000.000000000"`). New `graphcalc/numfmt.py::clean_float_exact(value)`
+  strips the trailing fractional zeros (and the trailing `"."` for an
+  integral value) from a sympy `Float`'s `str()`; `graphcalc/calc.py`'s
+  `evaluate` calls it for `exact` only when the result is actually a
+  `Float` -- a `Rational` (`{"expr": "1/3"}` still answers exact `"1/3"`,
+  never a decimal), an `Integer` (`10**1000` still answers exact as the
+  full 1001-digit integer and decimal `"1e1000"`, P25 unaffected), or a
+  symbolic result all keep plain `str(result)` exactly as before. Added
+  `tests/test_p31_clean_decimal_exact.py`; updated
+  `tests/test_evaluate_grammar.py`'s `.5x`/`2*.5` cases, which now assert
+  the clean `"2"`/`"1"` instead of the previously-padded
+  `"2.00000000000000"`/`"1.00000000000000"`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

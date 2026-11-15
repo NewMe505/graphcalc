@@ -6,6 +6,41 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P31 (2026-11-15, owner revision "clean exact for decimals"): `graphcalc/
+  calc.py`, `graphcalc/numfmt.py`, `tests/test_p31_clean_decimal_exact.py`,
+  `tests/test_evaluate_grammar.py`. Before this fix, `evaluate()`'s `exact`
+  field for a decimal literal was always plain `str(result)`; sympy's own
+  `str()` of a `Float` pads the mantissa out to its working precision (15
+  decimal digits by default), so `{"expr":"1.5"}` answered exact
+  `"1.50000000000000"` instead of the clean `"1.5"` a TI-Nspire CAS user
+  typed, and `{"expr":"1e5"}` answered `"100000.000000000"` instead of
+  `"100000"`. Fix: new `graphcalc/numfmt.py::clean_float_exact(value)`
+  strips the trailing fractional zeros (and the trailing `"."` for an
+  integral value) from a `Float`'s `str()`, reusing the same mantissa/
+  exponent split `format_decimal`'s scientific-notation branch already
+  uses so the rare Float whose own `str()` is already in `e`-notation
+  (e.g. very small magnitudes) gets the same cleanup, re-printed with
+  `format_decimal`'s own exponent style (lowercase `e`, no `+`, no leading
+  zeros). `calc.evaluate` now branches on `result.is_Float` before
+  building `exact`: only a `Float` result goes through
+  `clean_float_exact`; a `Rational` (`"1/3"`), an `Integer` (`10**1000`),
+  or a symbolic result all keep plain `str(result)` exactly as before --
+  confirmed directly, not just by acceptance text, since this is the same
+  number handling P29 touched and the planner notes specifically asked to
+  recheck P3/P4/P5/P25/P28 (all still pass; `10^1000` still answers
+  decimal `"1e1000"`, P25's scientific threshold is on `Integer`, never a
+  `Float`, so it was never at risk). One existing-test fix, not drift: P29's
+  own `test_p29_accept_evaluate_mixed_implied_mult`/`_explicit_mult`
+  (`.5x` with `x:=4`, and `2*.5`) asserted the padded `"2.00000000000000"`/
+  `"1.00000000000000"` as *current* behavior, not as a spec requirement --
+  both results are Floats (`.5` is a decimal literal), so this fix changes
+  what they assert to the clean `"2"`/`"1"`, annotated in place with why.
+  Added `tests/test_p31_clean_decimal_exact.py`: the F1 cases (`"1.5"` ->
+  exact/decimal `"1.5"`, `"1e5"` -> exact `"100000"`), the F2 case (`"1/3"`
+  -> exact `"1/3"`), and a regression that `"10^1000"` still answers
+  decimal `"1e1000"`. Full suite: 272 passed, 4 skipped. No plan drift, no
+  design question: additive, formatting-only, one new branch in one
+  existing function.
 - P33 (2026-11-15, Bug #27 fix): `graphcalc/static/style.css`,
   `tests/test_p33_wrapping.py`. Static files only, per the planner notes --
   no touch to `graphcalc/static/app.js` or any server Python module. Root

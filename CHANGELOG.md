@@ -226,3 +226,15 @@
   reachable only via a transformation-generated node, never via literal
   user text -- `{"expr":"5!"}` still answers exact `"120"` and
   `{"expr":"1/3+1/6"}` still answers exact `"1/2"`.
+- Bug #21 (P27, continued): a non-ASCII digit, letter, or
+  superscript/subscript numeral now answers 400 instead of being silently
+  accepted by Python's own Unicode-aware `\w`/`\d` -- `{"expr":"２+２"}`
+  (fullwidth digits), `{"expr":"٣+1"}` (an Arabic-indic digit) and
+  `{"expr":"x²"}` (an ASCII letter immediately followed by a superscript
+  two) each now answer 400 with a JSON `"error"` instead of evaluating.
+  The same rejection applies to a `"name:=expr"`/`"f(params):=expr"`
+  definition's own name and parameter list, not just its body --
+  `{"expr":"x²:=4"}`, `{"expr":"a２:=1"}` and `{"expr":"f(x²):=1"}` each
+  answer 400 too, and a rejected definition never reaches `CalcState`:
+  `GET /api/calc/vars` lists none of those names afterward, and the stored
+  variables/functions are byte-for-byte unchanged from before the attempt.

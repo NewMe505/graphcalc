@@ -5,6 +5,52 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P27/S3 (2026-11-14, Bug #21 fix): `tests/test_p27_evaluator_hardening.py`
+  (docs only this step; the code was already in place from P27/S2 below).
+  Scope: send a `"name:=expr"`/`"f(params):=expr"` definition through the
+  same two checks a plain expression already gets (S1's callable allowlist,
+  S2's non-ASCII tokenizer rejection), run on the *whole raw input* --
+  name, parameter list and body together -- and do it before any change to
+  the in-memory vars or the on-disk state file, so a rejected definition
+  leaves the stored vars byte-for-byte unchanged. Mechanism: S2's
+  `re.ASCII` flag on `calc._DEFINITION_RE`/`_FUNCTION_DEFINITION_RE` already
+  gives this for free -- a non-ASCII character in the name or a param
+  (`"x²:=4"`, `"a２:=1"`, `"f(x²):=1"`) makes neither regex match at all, so
+  `graphcalc.cli._handle_calc_evaluate` never takes the "definition" branch
+  (never calls `CalcState.set_variable`/`set_function`) and instead falls
+  through to a plain `calc.evaluate(expr, ...)` call on the *original,
+  unsplit* string, which rejects the non-ASCII character itself via
+  `check_grammar`/`_check_ascii_only` the same way any other expression
+  does -- 400, before `parse_expr` ever runs. Added
+  `test_p27_unicode_definition_superscript_in_name_is_400`,
+  `test_p27_unicode_definition_fullwidth_digit_in_name_is_400`,
+  `test_p27_unicode_function_definition_superscript_in_param_is_400` and
+  `test_p27_unicode_rejected_definitions_do_not_change_stored_vars` (the
+  last one POSTs all three, then confirms `GET /api/calc/vars` still
+  answers `{"variables": {}, "functions": {}}`). Full suite (P23-P26
+  included) still passes: 214 passed, 1 skipped.
+- P27/S2 (2026-11-14, Bug #21 fix): `graphcalc/grammar.py`,
+  `graphcalc/calc.py`, `tests/test_p27_evaluator_hardening.py`
+  (undocumented until this step). Bug #21's other half:
+  `{"expr":"２+２"}` (U+FF12 fullwidth digits), `{"expr":"٣+1"}` (U+0663
+  Arabic-indic digit) and `{"expr":"x²"}` (U+00B2 superscript two) each
+  evaluated successfully instead of answering 400. Root cause:
+  `graphcalc.grammar._TOKEN_RE`'s `IDENT`/`NUMBER` groups are built on
+  Python's own `\w`/`\d`, which are Unicode-aware by default (not the
+  ASCII-only `[A-Za-z0-9_]`/`[0-9]` the grammar's docstring implies), so
+  the regex happily matched "２+２" as two `NUMBER` tokens and "x²" as one
+  `IDENT` token `"x²"` -- never reaching any rejection. Fix: new
+  `grammar._check_ascii_only(expr)` scans every character ahead of the
+  tokenizer loop (not folded into `_TOKEN_RE` as one more alternative,
+  since a non-ASCII character that is only *part* of a larger match, like
+  the "²" inside "x²", would never be inspected on its own once the regex
+  had already consumed it) and raises for any non-ASCII letter, digit, or
+  numeral (`isdigit()`/`isalpha()`/`isnumeric()`, plus a Unicode-category
+  check on `Nd`/`No`/`L*` as a second net). Also added `re.ASCII` to
+  `calc._DEFINITION_RE`/`_FUNCTION_DEFINITION_RE` (see P27/S3 above for why
+  that part matters for a definition's name/params specifically, not just
+  its body). New tests `test_p27_unicode_expr_raises_calc_error` (unit,
+  parametrized) and the three `test_p27_unicode_expr_*_is_400` HTTP tests.
 - P27/S1 (2026-11-14, Bug #21 fix): `graphcalc/calc.py`,
   `tests/test_p27_evaluator_hardening.py`. Bug #21 was that
   `{"expr":"Integer(2)"}`, `{"expr":"Float(2)"}`, `{"expr":"Rational(1,2)"}`

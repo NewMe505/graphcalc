@@ -36,6 +36,7 @@ HEALTH_PATH = "/health"
 CALC_EVALUATE_PATH = "/api/calc/evaluate"
 CALC_HISTORY_PATH = "/api/calc/history"
 CALC_VARS_PATH = "/api/calc/vars"
+STATE_RESET_PATH = "/api/state/reset"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -192,6 +193,27 @@ def _handle_calc_vars_get(handler):
         for name, spec in state.functions().items()
     }
     _send_json(handler, 200, {"variables": variables, "functions": functions})
+
+
+def _handle_state_reset(handler):
+    """POST /api/state/reset -> 200 {"status": "reset"} (plan step P9/S3).
+
+    Empties variables, functions, lists, history and "ans" in one go:
+    `_state(handler).reset()` (graphcalc.state.CalcState.reset) clears the
+    first four and "ans" and, when a --state path is set, saves the now-
+    empty state to disk once (one atomic write, not a sequence of partial
+    ones). The history store is cleared too -- `_history_store(handler).
+    clear()` -- which matters for a --in-memory run's plain
+    InMemoryHistoryStore (not reachable through CalcState.reset() at all,
+    since that store holds its own list) and is a harmless no-op for a
+    --state run's StateBackedHistoryStore, whose clear() just calls back
+    into the same CalcState.reset() already emptied "history" (clearing an
+    already-empty list). Either way, GET /api/calc/history and GET
+    /api/calc/vars both read back empty right after this.
+    """
+    _state(handler).reset()
+    _history_store(handler).clear()
+    _send_json(handler, 200, {"status": "reset"})
 
 
 def _handle_calc_evaluate(handler):
@@ -372,6 +394,7 @@ class Handler(BaseHTTPRequestHandler):
     - GET /api/calc/history     -> see _handle_calc_history_get
     - DELETE /api/calc/history  -> see _handle_calc_history_delete
     - GET /api/calc/vars        -> see _handle_calc_vars_get
+    - POST /api/state/reset     -> see _handle_state_reset
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -396,6 +419,9 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == CALC_EVALUATE_PATH:
             _handle_calc_evaluate(self)
+            return
+        if self.path == STATE_RESET_PATH:
+            _handle_state_reset(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

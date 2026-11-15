@@ -18,11 +18,22 @@ and --in-memory wiring (plan step P9/S2) is exercised below instead, by
 test_p9_restart_persists_variable, through a real `python -m graphcalc`
 subprocess -- the actual F1 acceptance check (PRODUCT.md): "After 'a:=5'
 with --state S, restarting the server with the same --state S and
-evaluating 'a' returns exact '5'". POST /api/state/reset and the
-.gitignore entry are still a later step of the same plan (P9).
+evaluating 'a' returns exact '5'".
+
+F3 (PRODUCT.md, plan step P9/S3): "POST /api/state/reset returns 200
+{"status":"reset"} and empties variables, functions, lists and history;
+with --in-memory no state file is created." test_p9_state_reset_
+empties_everything proves the first half through graphcalc.cli.Handler's
+real route (_handle_state_reset); test_p9_state_reset_in_memory_creates_no_
+file proves the second half through a real `python -m graphcalc
+--in-memory` subprocess, the same way test_p9_restart_persists_variable
+proves F1 through a subprocess rather than an in-process injection. The
+.gitignore entry is still a later step of the same plan (P9).
 """
 
 import json
+import os
+import pathlib
 import socket
 import subprocess
 import sys
@@ -37,6 +48,17 @@ from graphcalc.state import CalcState
 
 REQUIRED_KEYS = {"variables", "functions", "lists", "history"}
 
+# graphcalc is not pip-installed in this environment -- `python -m graphcalc`
+# only resolves the package because the repo root happens to be on sys.path
+# (the implicit cwd entry `-m` adds) when a subprocess inherits this test
+# runner's own cwd. test_p9_restart_persists_variable relies on that (it
+# never sets `cwd=`). test_p9_state_reset_in_memory_creates_no_file,
+# however, must run with cwd set to a fresh temp directory (so a relative
+# "./graphcalc_state.json" would land right there if --in-memory did not
+# suppress it) -- so that subprocess needs the repo root added to
+# PYTHONPATH instead, to stay importable from an unrelated cwd.
+REPO_ROOT = str(pathlib.Path(__file__).resolve().parent.parent)
+
 
 def _post(base, path, payload):
     data = json.dumps(payload).encode("utf-8")
@@ -46,6 +68,15 @@ def _post(base, path, payload):
         headers={"Content-Type": "application/json"},
         method="POST",
     )
+    try:
+        with urllib.request.urlopen(req) as res:
+            return res.status, json.loads(res.read().decode("utf-8"))
+    except urllib.error.HTTPError as err:
+        return err.code, json.loads(err.read().decode("utf-8"))
+
+
+def _get(base, path):
+    req = urllib.request.Request(base + path, method="GET")
     try:
         with urllib.request.urlopen(req) as res:
             return res.status, json.loads(res.read().decode("utf-8"))
@@ -295,3 +326,92 @@ def test_p9_state_file_valid_json_after_wrong_shape_field_allows_evaluation(tmp_
 
     data = _read_state_file(str(path))
     assert len(data["history"]) == 1, data
+
+
+# ---- F3: POST /api/state/reset -> 200 {"status": "reset"}, and empties
+# variables, functions, lists and history both through the API and on disk
+# ----
+
+
+def test_p9_state_reset_empties_everything(tmp_path):
+    path = str(tmp_path / "state.json")
+    state = CalcState(path)
+    srv = build_server(0, history_store=StateBackedHistoryStore(state), state=state)
+    base = _start(srv)
+    try:
+        # Define a variable and a function, and leave a plain evaluation in
+        # history too, so there is something of each kind to empty.
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "a:=5"})
+        assert status == 200, body
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "f(x):=x+1"})
+        assert status == 200, body
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "1+1"})
+        assert status == 200, body
+        data = _read_state_file(path)
+        assert data["variables"] == {"a": "5"}, data
+        assert "f" in data["functions"], data
+        assert len(data["history"]) == 3, data
+
+        status, body = _post(base, "/api/state/reset", {})
+        assert status == 200, body
+        assert body == {"status": "reset"}, body
+
+        # Empty through the API: variables, functions and history.
+        status, history_body = _get(base, "/api/calc/history")
+        assert status == 200, history_body
+        assert history_body == {"history": []}, history_body
+
+        status, vars_body = _get(base, "/api/calc/vars")
+        assert status == 200, vars_body
+        assert vars_body["variables"] == {}, vars_body
+        assert vars_body["functions"] == {}, vars_body
+
+        # Empty on disk too: variables, functions, lists and history all.
+        data = _read_state_file(path)
+        assert data["variables"] == {}, data
+        assert data["functions"] == {}, data
+        assert data["lists"] == {}, data
+        assert data["history"] == [], data
+    finally:
+        _stop(srv)
+
+
+def _start_cli_subprocess_in_memory(port, cwd):
+    env = dict(os.environ)
+    env["PYTHONPATH"] = REPO_ROOT + os.pathsep + env.get("PYTHONPATH", "")
+    return subprocess.Popen(
+        [sys.executable, "-m", "graphcalc", "--port", str(port), "--in-memory"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        cwd=cwd,
+        env=env,
+    )
+
+
+def test_p9_state_reset_in_memory_creates_no_file(tmp_path):
+    """F3 (PRODUCT.md): "with --in-memory no state file is created."
+
+    Runs the real CLI subprocess with --in-memory and cwd set to a fresh
+    temp directory (so a relative "./graphcalc_state.json" -- the default
+    graphcalc/cli.py's own --state argument would otherwise use -- would
+    land right here if --in-memory did not suppress it). A definition and a
+    reset both happen before the directory is checked, so this proves
+    --in-memory suppresses the reset's write too, not just the initial one.
+    """
+    port = _free_port()
+    proc = _start_cli_subprocess_in_memory(port, cwd=str(tmp_path))
+    try:
+        _wait_for_health(port)
+        base = f"http://127.0.0.1:{port}"
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "a:=5"})
+        assert status == 200, body
+        assert body["exact"] == "5", body
+
+        status, body = _post(base, "/api/state/reset", {})
+        assert status == 200, body
+        assert body == {"status": "reset"}, body
+    finally:
+        _stop_cli_subprocess(proc)
+
+    assert list(tmp_path.iterdir()) == [], list(tmp_path.iterdir())

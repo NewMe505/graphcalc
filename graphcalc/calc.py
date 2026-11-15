@@ -50,6 +50,7 @@ from sympy.parsing.sympy_parser import (
 )
 
 from graphcalc.grammar import GrammarError, _tokenize, called_names, check_grammar
+from graphcalc.limits import is_power_too_large
 from graphcalc.numfmt import format_decimal
 
 # Deliberately NOT sympy's bundled implicit_multiplication_application: that
@@ -293,6 +294,14 @@ class CalcError(Exception):
 # features (and tests) can check against the exact wording.
 DOMAIN_ERROR_DIVISION_BY_ZERO = "division by zero"
 DOMAIN_ERROR_UNDEFINED = "undefined"
+# A power whose result graphcalc.limits.is_power_too_large estimates would
+# need more decimal digits than it allows (plan step P28/S1, Bug #20 fix) --
+# "9^9^9", "10^10^10", "2^10000000". Reported the same way as the two
+# domain_error messages above: exact/decimal/complex are all None, and
+# evaluate() never lets sympy's own, real parse_expr touch `expr` at all,
+# so a request that would otherwise freeze the server trying to materialize
+# an astronomically large exact integer instead answers almost immediately.
+DOMAIN_ERROR_TOO_LARGE = "result too large to compute"
 
 _INFINITE_RESULTS = (zoo, oo, -oo)
 
@@ -349,7 +358,14 @@ def evaluate(
     division by zero (1/0 -> zoo, or oo/-oo) or an indeterminate form
     (0/0 -> nan) -- `exact`, `decimal` and `complex` are all None instead,
     and `domain_error` holds a message: "division by zero" for zoo/oo/-oo,
-    "undefined" for nan.
+    "undefined" for nan. The same None/None/None shape, with domain_error
+    "result too large to compute", is also returned -- before sympy's own
+    parse_expr ever runs on `expr` at all -- for a power such as "9^9^9"
+    or "10^10^10" that graphcalc.limits.is_power_too_large estimates would
+    need an unreasonable number of decimal digits to materialize exactly
+    (plan step P28/S1, Bug #20 fix): letting sympy actually attempt that
+    computation could freeze this calculator's single-threaded HTTP server
+    for every other request, for minutes or far longer.
 
     `last_entry` is graphcalc.state.CalcState.ans() -- {"exact": str,
     "srepr": str} for the last successful plain evaluation, or None when
@@ -473,6 +489,26 @@ def evaluate(
         check_grammar(expr)
     except GrammarError as exc:
         raise CalcError(str(exc)) from exc
+
+    # Power-size guard (plan step P28/S1, Bug #20 fix): checked before any
+    # of the real parsing below, including the "bare ans" fast path above
+    # it in the docstring's own ordering -- is_power_too_large has already
+    # parsed `expr` on its own, with evaluate=False, by the time it
+    # returns, so this never costs more than a second cheap parse on an
+    # expression that turns out fine. A flagged `expr` short-circuits
+    # straight to the same response shape a division-by-zero or an
+    # indeterminate form gets -- exact/decimal/complex all None, a
+    # domain_error set -- and sympy's own, real (eagerly-evaluating)
+    # parse_expr, further down, never runs on it at all.
+    if is_power_too_large(expr):
+        return {
+            "expr": expr,
+            "exact": None,
+            "decimal": None,
+            "complex": None,
+            "domain_error": DOMAIN_ERROR_TOO_LARGE,
+            "_result_srepr": None,
+        }
 
     local_dict = _deg_names() if mode == "deg" else _rad_names()
     stored_srepr = None

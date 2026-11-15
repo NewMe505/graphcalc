@@ -238,3 +238,24 @@
   answer 400 too, and a rejected definition never reaches `CalcState`:
   `GET /api/calc/vars` lists none of those names afterward, and the stored
   variables/functions are byte-for-byte unchanged from before the attempt.
+- Bug #20 (P28): `POST /api/calc/evaluate` no longer freezes the server on a
+  power whose exact result would need an unreasonable number of decimal
+  digits -- `{"expr":"9^9^9"}` (~369,671,667 digits), `{"expr":
+  "10^10^10"}` (10,000,000,000 digits) and `{"expr":"2^10000000"}`
+  (~3,010,300 digits) previously made sympy try to materialize that exact
+  integer before answering at all, which could block every other request,
+  including an unrelated `{"expr":"1+1"}`, for minutes or longer. New
+  `graphcalc/limits.py::is_power_too_large()` parses the expression a
+  second time with `evaluate=False` and estimates each power's result size
+  from float `log10` arithmetic alone -- base's magnitude times exponent's
+  magnitude, recursing bottom-up through a right-associative tower such as
+  `9^9^9` without ever computing the inner exponent exactly -- before
+  `calc.evaluate`'s own, real (evaluating) `parse_expr` call runs at all.
+  A power estimated past the limit answers 200 with `domain_error:
+  "result too large to compute"` instead (`exact`/`decimal`/`complex` all
+  `null`), each within the same request/response cycle, so the next
+  request is always answered. A symbolic or non-numeric base/exponent
+  (`{"expr":"x^10000000"}`, a stored variable used as a base or exponent)
+  is always treated as "unknown" and let through unflagged.
+  `{"expr":"10^1000"}` (1001 digits) still answers exact `"1000000...0"`
+  and decimal `"1e1000"`.

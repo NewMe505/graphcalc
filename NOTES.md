@@ -5,6 +5,46 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P28/S1 attempt 2 (2026-11-14, Bug #20 fix): fixed a regression attempt 1's
+  `graphcalc/limits.py::is_power_too_large()` introduced in
+  `test_p24_multiletter_sec_deg_no_constant` and
+  `test_p24_bare_names_no_constant` (both turned a clean 200 into a 400
+  `"unexpected error: 'function' object has no attribute 'atoms'"`). Root
+  cause: `is_power_too_large`'s own `parse_expr(expr, ..., evaluate=False)`
+  call never passed `global_dict=_GLOBAL_DICT` (the module already defined
+  that restricted dict, just never used it), so it defaulted to sympy's
+  entire real namespace -- a bare `"sec"`, `"deg"`, `"S"`, `"N"` or `"Q"`
+  then resolved to the real sympy function/singleton of that name instead
+  of becoming a free `Symbol`, and `.atoms(Pow)` raised `AttributeError` on
+  those (none is a sympy `Basic`). Fixed by passing `global_dict=
+  _GLOBAL_DICT` to that call, adding an `isinstance(parsed, Basic)` guard,
+  and wrapping the whole parse-and-walk body in one `try/except Exception:
+  return False` (not just the parse step) so this guard can never itself
+  turn a valid request into a crash, matching the plan step's own "treat
+  any non-numeric or symbolic part as unknown and allow it" rule. Also
+  lowered `MAX_POWER_DIGITS` from `10**5` to `4_000`: Python's own default
+  integer-to-string conversion limit (`sys.get_int_max_str_digits()`, 4300
+  on 3.11+) made `calc.evaluate`'s later `str(result)` call raise
+  `ValueError("Exceeds the limit (4300 digits)...")` for a result between
+  the old threshold and 4300 digits -- confirmed with `{"expr":
+  "2^20000"}` (~6,021 digits) -- which `cli.py`'s catch-all then turned
+  into exactly the forbidden `"unexpected error: Exceeds the limit..."`
+  wording the acceptance criteria ban. 4,000 keeps margin below 4300 for
+  this guard's own float-arithmetic imprecision while `{"expr":
+  "10^1000"}` (1001 digits) still passes. Added
+  `test_p28_2_to_the_20000_flagged_before_pythons_own_str_digit_limit` to
+  `tests/test_p28_freeze.py`; `tests/test_p28_freeze.py` and
+  `tests/test_p24_names.py` were otherwise unchanged from attempt 1. Full
+  suite: 221 passed, 1 skipped. Known limitation, in-spec for S1: a stored
+  variable used as a power's base/exponent bypasses this guard entirely
+  (e.g. defining `a:=9` then evaluating `{"expr":"a^a^a"}`) -- the guard's
+  own second parse sees a bare `Symbol`, not the stored value, so it is
+  "unknown" and let through unflagged, then `calc.evaluate`'s real,
+  evaluating `parse_expr` binds `a` to 9 and computes the tower exactly.
+  The plan step's own rule ("any non-numeric or symbolic part" is unknown
+  and always allowed) covers this; a future step would need to size up a
+  referenced variable's *stored value*, not just the bare name, to close
+  it.
 - P27/S3 (2026-11-14, Bug #21 fix): `tests/test_p27_evaluator_hardening.py`
   (docs only this step; the code was already in place from P27/S2 below).
   Scope: send a `"name:=expr"`/`"f(params):=expr"` definition through the

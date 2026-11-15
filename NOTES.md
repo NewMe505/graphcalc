@@ -5,6 +5,28 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P27/S1 (2026-11-14, Bug #21 fix): `graphcalc/calc.py`,
+  `tests/test_p27_evaluator_hardening.py`. Bug #21 was that
+  `{"expr":"Integer(2)"}`, `{"expr":"Float(2)"}`, `{"expr":"Rational(1,2)"}`
+  and `{"expr":"factorial(5)"}` each evaluated successfully instead of
+  answering 400. Root cause: `evaluate()`'s pre-parse "unknown function"
+  check (`called_names(expr)` against `local_dict`, added for Bug #7/P24)
+  also let a call through when the name was a key of `_GLOBAL_DICT` --
+  the internal sympy constructors (`Integer`, `Float`, `Rational`,
+  `Symbol`, `Function`, `factorial`) that `parse_expr`'s transformations
+  (`auto_number`, `auto_symbol`, `factorial_notation`) emit from a
+  *generated* AST node, never from literal text the user typed. Fix: drop
+  the "or in `_GLOBAL_DICT`" half of that check, so a called name must be
+  in `local_dict` regardless. `_GLOBAL_DICT` itself (what gets passed as
+  `parse_expr`'s own `global_dict`) is untouched -- those constructors stay
+  reachable for the transformations, just never via a name the user typed
+  followed by `"("`, since `called_names()` only tokenizes the literal
+  source text, never the generated AST. Verified `"5!"` -> exact `"120"`
+  and `"1/3+1/6"` -> exact `"1/2"` still work (factorial_notation's and
+  Rational's own generated calls, not literal "factorial("/"Rational(" in
+  the source text), and the full suite (P23-P26 included) still passes.
+  Out of scope for this step (left for a later P27 step per the plan):
+  the Unicode-digit/letter/superscript tokenizer rejections.
 - P26 (2026-11-14, Bug #14 fix): `graphcalc/calc.py`, `graphcalc/state.py`,
   `graphcalc/cli.py`, `tests/test_state_robustness.py`. Bug #14 was that a
   stored "ans", variable, or function could break a *later, unrelated*

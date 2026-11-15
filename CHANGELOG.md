@@ -209,3 +209,20 @@
   `graphcalc/grammar.py::called_names()`, sharing P23's tokenizer, finds
   every name immediately followed by `"("` so `calc.evaluate` can check it
   against its whitelist before `parse_expr` ever runs.
+- Bug #21 (P27): `POST /api/calc/evaluate` no longer lets a user call one of
+  sympy's internal constructors by name. Before this fix, `calc.evaluate`'s
+  "unknown function" check (Bug #7's `called_names(expr)` scan) let a call
+  through whenever the name was a key of `_GLOBAL_DICT` -- the small set of
+  constructors (`Integer`, `Float`, `Rational`, `Symbol`, `Function`,
+  `factorial`) `parse_expr`'s own transformations need to emit internally
+  from a generated AST node, never meant to be reachable by name from
+  user-typed text -- so `{"expr":"Integer(2)"}`, `{"expr":"Float(2)"}`,
+  `{"expr":"Rational(1,2)"}` and `{"expr":"factorial(5)"}` each evaluated
+  successfully instead of being rejected. Each now answers 400 with a JSON
+  `"error"`. The check now only accepts a called name already in
+  `local_dict` (the rad/deg whitelist, a stored variable or function, a
+  function definition's own param, or "ans"), regardless of whether it is
+  also a `_GLOBAL_DICT` key; `_GLOBAL_DICT` itself is unchanged, still
+  reachable only via a transformation-generated node, never via literal
+  user text -- `{"expr":"5!"}` still answers exact `"120"` and
+  `{"expr":"1/3+1/6"}` still answers exact `"1/2"`.

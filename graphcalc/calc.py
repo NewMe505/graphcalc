@@ -465,24 +465,38 @@ def evaluate(
             local_dict["ans"] = (
                 sympify(stored_srepr) if stored_srepr is not None else _UNDEFINED_ANS
             )
-        # A name called with "(" that is in neither local_dict (the rad/deg
+        # A name called with "(" that is not in local_dict (the rad/deg
         # whitelist, a stored variable or function, a function definition's
-        # own param, "ans") nor _GLOBAL_DICT is unknown *and* undefined --
-        # never a function this calculator can call (plan step P24/S3, Bug
-        # #7 fix). Rejected here, before parse_expr ever runs, so an
-        # uppercase name such as "SIN" in "SIN(pi/2)" (not the same name as
-        # the whitelisted, lowercase "sin") or a real sympy name this
-        # calculator never whitelisted ("zeta(2)") is a 400 with
-        # "unknown function '<name>'" -- never left for parse_expr's own
-        # auto_symbol fallback, which would otherwise wrap the call in a
-        # Function(...) that implicit_multiplication's close-paren-before-
-        # open-paren rule immediately downgrades back to a plain Symbol
-        # times the argument list (e.g. "SIN(pi/2)" -> "pi*SIN/2") -- a
-        # name is matched exactly and case-sensitively, never resolved by
-        # building a Function object whose own str() (e.g. "SIN(...)")
-        # would contain the letter I.
+        # own param, "ans") is unknown *and* undefined -- never a function
+        # this calculator can call (plan step P24/S3, Bug #7 fix; tightened
+        # by plan step P27/S1, Bug #21 fix). Rejected here, before
+        # parse_expr ever runs, so an uppercase name such as "SIN" in
+        # "SIN(pi/2)" (not the same name as the whitelisted, lowercase
+        # "sin") or a real sympy name this calculator never whitelisted
+        # ("zeta(2)") is a 400 with "unknown function '<name>'" -- never
+        # left for parse_expr's own auto_symbol fallback, which would
+        # otherwise wrap the call in a Function(...) that implicit_
+        # multiplication's close-paren-before-open-paren rule immediately
+        # downgrades back to a plain Symbol times the argument list (e.g.
+        # "SIN(pi/2)" -> "pi*SIN/2") -- a name is matched exactly and
+        # case-sensitively, never resolved by building a Function object
+        # whose own str() (e.g. "SIN(...)") would contain the letter I.
+        #
+        # _GLOBAL_DICT is deliberately *not* checked here (Bug #21): it
+        # holds only the internal constructors (Integer, Float, Rational,
+        # Symbol, Function, factorial) that parse_expr's own transformations
+        # emit from a generated AST node -- auto_number for a bare "2",
+        # auto_symbol for a bare "x", factorial_notation for postfix "!" --
+        # never from a name the user actually typed followed by "(" in the
+        # source text. called_names(expr) only ever sees the latter, so
+        # checking it against local_dict alone means "Integer(2)",
+        # "Float(2)", "Rational(1,2)" and "factorial(5)" are all rejected
+        # as unknown functions, while "5!" (factorial_notation's own
+        # generated factorial(...) call, never present as the literal text
+        # "factorial(") and "1/3+1/6" (Rational's own generated calls, same
+        # reasoning) still evaluate normally.
         for name in called_names(expr):
-            if name not in local_dict and name not in _GLOBAL_DICT:
+            if name not in local_dict:
                 raise CalcError(f"unknown function '{name}'")
         # A bare "ans" request (nothing else in `expr`) is a true fixed
         # point: reuse the previous call's own `exact`/srepr verbatim

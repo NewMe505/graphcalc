@@ -137,6 +137,7 @@ STATS_ONEVAR_PATH = "/api/stats/onevar"
 STATS_REGRESSION_PATH = "/api/stats/regression"
 CAS_SIMPLIFY_PATH = "/api/cas/simplify"
 CAS_EXPAND_PATH = "/api/cas/expand"
+CAS_FACTOR_PATH = "/api/cas/factor"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -894,8 +895,8 @@ def _handle_stats_regression(handler):
 def _handle_cas_op(handler, op):
     """Shared body for every stateless POST /api/cas/<op> route (plan step
     P19/S2 pulls this out of what was _handle_cas_simplify alone in P19/S1,
-    so /simplify and /expand -- and /factor, when a later plan step adds
-    it -- share one handler instead of three near-identical copies).
+    so /simplify, /expand and /factor -- added in P19/S3 -- share one
+    handler instead of three near-identical copies).
 
     `op` is one of graphcalc.cas's own functions (simplify, expand, ...):
     "expr" is handed to it exactly as the client sent it, and that function
@@ -951,6 +952,15 @@ def _handle_cas_expand(handler):
     _handle_cas_op(handler, cas.expand)
 
 
+def _handle_cas_factor(handler):
+    """POST /api/cas/factor {"expr"} -> 200 JSON {"result": str} (plan step
+    P19/S3). See _handle_cas_op for the shared body this delegates to.
+    """
+    from graphcalc import cas
+
+    _handle_cas_op(handler, cas.factor)
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -976,6 +986,7 @@ class Handler(BaseHTTPRequestHandler):
     - POST /api/stats/regression -> see _handle_stats_regression
     - POST /api/cas/simplify    -> see _handle_cas_simplify
     - POST /api/cas/expand      -> see _handle_cas_expand
+    - POST /api/cas/factor      -> see _handle_cas_factor
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -1033,6 +1044,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == CAS_EXPAND_PATH:
             _handle_cas_expand(self)
+            return
+        if self.path == CAS_FACTOR_PATH:
+            _handle_cas_factor(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

@@ -1,10 +1,10 @@
 """CAS algebra core for POST /api/cas/simplify, /expand and /factor.
 
-Plan step P19/S1 implemented simplify(expr); plan step P19/S2 adds
-expand(expr) next to it in this same module. factor() is left for a later
-plan step to add. simplify() and expand() are the only things graphcalc/
-cli.py calls from here so far; neither they nor _parse ever touches the
-network.
+Plan step P19/S1 implemented simplify(expr); plan step P19/S2 added
+expand(expr) next to it in this same module; plan step P19/S3 adds
+factor(expr) to complete the set. simplify(), expand() and factor() are
+the only things graphcalc/cli.py calls from here; neither they nor _parse
+ever touches the network.
 
 _parse(expr) turns `expr` into a sympy expression and is deliberately built
 the same way graphcalc.calc.evaluate() parses its own input (plan steps
@@ -51,6 +51,7 @@ catch exactly that one type and turn it into the usual JSON 400, the same
 """
 
 from sympy import expand as _sympy_expand
+from sympy import factor as _sympy_factor
 from sympy import simplify as _sympy_simplify
 from sympy.parsing.sympy_parser import parse_expr
 
@@ -114,3 +115,14 @@ def expand(expr: str) -> str:
     """
     parsed = _parse(expr)
     return to_text(_sympy_expand(parsed))
+
+
+def factor(expr: str) -> str:
+    """Parse `expr`, run sympy.factor() on it, and return the "^"-notation
+    text of the result (plan step P19/S3).
+
+    e.g. factor("x^2-5x+6") -> "(x - 3)*(x - 2)". Raises CalcError for a
+    malformed `expr`, never any other exception.
+    """
+    parsed = _parse(expr)
+    return to_text(_sympy_factor(parsed))

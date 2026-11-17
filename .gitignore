@@ -8,3 +8,4 @@ htmlcov/
 .scio/sandbox/
 .scio/ledger/
 .scio/artifacts/
+graphcalc_state.json

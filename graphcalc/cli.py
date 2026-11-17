@@ -14,11 +14,31 @@ _handle_calc_history_delete).
 
 A "name:=expr" input (graphcalc.calc.parse_definition) is detected before
 the normal evaluate path and stores the result in a graphcalc.state.CalcState
-held on the HTTPServer instance (see build_server and _state) -- separate
-from the history store (history and state are not yet unified behind one
-object; that is a later feature, P9), but a successful definition is added
-to both. GET /api/calc/vars reads that same CalcState back as JSON (see
-_handle_calc_vars_get).
+held on the HTTPServer instance (see build_server and _state), but a
+successful definition is added to both. GET /api/calc/vars reads that same
+CalcState back as JSON (see _handle_calc_vars_get).
+
+Disk persistence (plan step P9): main()'s `--state PATH` (default
+"./graphcalc_state.json") builds a CalcState on that path plus a
+graphcalc.history.StateBackedHistoryStore on top of it, so history now lives
+in the same JSON file as variables/functions/lists -- the "separate objects"
+split described above is only about the in-process API (CalcState vs.
+HistoryStore), not the on-disk shape, which P9 unified. `--in-memory` passes
+no path to CalcState and plugs in a plain InMemoryHistoryStore instead, so
+nothing ever touches disk (see serve()). POST /api/state/reset
+(_handle_state_reset) empties both in one call.
+
+The graphing API (plan step P10) lives at POST /api/graph/plot -- see
+_handle_graph_plot, which defers the actual parsing, sampling and
+evaluation to graphcalc.graph.plot(). Stateless: unlike /api/calc/evaluate,
+it never reads from or writes to the HTTPServer's CalcState or history
+store.
+
+POST /api/graph/window (plan step P11) lives next to it -- see
+_handle_graph_window, which defers to graphcalc.graph.window(). Also
+stateless: the client sends the window it already has (or none at all,
+for the default "standard" window) and gets the next one back; this
+server never remembers a "current" window across requests.
 """
 
 import argparse
@@ -29,13 +49,16 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import unquote
 
 from graphcalc import __version__
-from graphcalc.history import InMemoryHistoryStore
+from graphcalc.history import InMemoryHistoryStore, StateBackedHistoryStore
 from graphcalc.state import CalcState
 
 HEALTH_PATH = "/health"
 CALC_EVALUATE_PATH = "/api/calc/evaluate"
 CALC_HISTORY_PATH = "/api/calc/history"
 CALC_VARS_PATH = "/api/calc/vars"
+STATE_RESET_PATH = "/api/state/reset"
+GRAPH_PLOT_PATH = "/api/graph/plot"
+GRAPH_WINDOW_PATH = "/api/graph/window"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -192,6 +215,27 @@ def _handle_calc_vars_get(handler):
         for name, spec in state.functions().items()
     }
     _send_json(handler, 200, {"variables": variables, "functions": functions})
+
+
+def _handle_state_reset(handler):
+    """POST /api/state/reset -> 200 {"status": "reset"} (plan step P9/S3).
+
+    Empties variables, functions, lists, history and "ans" in one go:
+    `_state(handler).reset()` (graphcalc.state.CalcState.reset) clears the
+    first four and "ans" and, when a --state path is set, saves the now-
+    empty state to disk once (one atomic write, not a sequence of partial
+    ones). The history store is cleared too -- `_history_store(handler).
+    clear()` -- which matters for a --in-memory run's plain
+    InMemoryHistoryStore (not reachable through CalcState.reset() at all,
+    since that store holds its own list) and is a harmless no-op for a
+    --state run's StateBackedHistoryStore, whose clear() just calls back
+    into the same CalcState.reset() already emptied "history" (clearing an
+    already-empty list). Either way, GET /api/calc/history and GET
+    /api/calc/vars both read back empty right after this.
+    """
+    _state(handler).reset()
+    _history_store(handler).clear()
+    _send_json(handler, 200, {"status": "reset"})
 
 
 def _handle_calc_evaluate(handler):
@@ -360,6 +404,83 @@ def _handle_calc_evaluate(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_graph_plot(handler):
+    """POST /api/graph/plot: {"functions","window","samples"} -> graph.plot's
+    dict, 200 JSON (plan step P10/S1).
+
+    A malformed body, a non-object body, or a graphcalc.graph.GraphError
+    (bad function slot, bad window, bad sample count, or a free variable
+    other than "x") is a JSON 400. graphcalc.calc.CalcError -- bad syntax,
+    an unknown function call, or an expression the freeze guard flags, all
+    of which graph.plot() can raise unchanged, via graphcalc.graph.
+    _parse_function reusing graphcalc.calc.evaluate -- is also a JSON 400
+    here, not just GraphError (see graphcalc.graph's own module docstring
+    for why both are expected). The catch-all at the very end is this
+    handler's own backstop for anything neither of those two covers: this
+    endpoint must never answer with a 500.
+
+    graphcalc.graph is imported lazily, the same reason graphcalc.calc is
+    imported lazily in _handle_calc_evaluate: every other route keeps
+    working even if sympy were ever unavailable.
+    """
+    from graphcalc import calc, graph
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = graph.plot(payload)
+        except (graph.GraphError, calc.CalcError) as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_graph_window(handler):
+    """POST /api/graph/window: {"action","factor","dx","dy","window"} ->
+    graph.window's dict, 200 JSON (plan step P11/S1).
+
+    A malformed body, a non-object body, or a graphcalc.graph.GraphError
+    (an unknown action, a bad window, or a bad factor/dx/dy) is a JSON
+    400. Unlike _handle_graph_plot, graph.window() never calls
+    graphcalc.calc.evaluate, so there is no CalcError to catch here -- see
+    graphcalc.graph's own module docstring. The catch-all at the very end
+    is this handler's own backstop for anything else: this endpoint must
+    never answer with a 500.
+
+    graphcalc.graph is imported lazily, the same reason graphcalc.calc is
+    imported lazily in _handle_calc_evaluate: every other route keeps
+    working even if sympy were ever unavailable.
+    """
+    from graphcalc import graph
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = graph.window(payload)
+        except graph.GraphError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -372,6 +493,9 @@ class Handler(BaseHTTPRequestHandler):
     - GET /api/calc/history     -> see _handle_calc_history_get
     - DELETE /api/calc/history  -> see _handle_calc_history_delete
     - GET /api/calc/vars        -> see _handle_calc_vars_get
+    - POST /api/state/reset     -> see _handle_state_reset
+    - POST /api/graph/plot      -> see _handle_graph_plot
+    - POST /api/graph/window    -> see _handle_graph_window
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -396,6 +520,15 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         if self.path == CALC_EVALUATE_PATH:
             _handle_calc_evaluate(self)
+            return
+        if self.path == STATE_RESET_PATH:
+            _handle_state_reset(self)
+            return
+        if self.path == GRAPH_PLOT_PATH:
+            _handle_graph_plot(self)
+            return
+        if self.path == GRAPH_WINDOW_PATH:
+            _handle_graph_window(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 
@@ -431,8 +564,20 @@ def build_server(port, history_store=None, state=None):
 
 # Process lifecycle: the black-box acceptance tests run it against the started app;
 # the coverage floor counts in-process code only (M11).
-def serve(port):  # pragma: no cover
-    server = build_server(port)
+def serve(port, state_path=None):  # pragma: no cover
+    """Build the server and run it until interrupted.
+
+    `state_path` is the on-disk file to persist variables, functions,
+    history and lists to (plan step P9/S2) -- a CalcState(state_path) and a
+    StateBackedHistoryStore built on top of it are passed into build_server,
+    so a later process started with the same `state_path` picks up right
+    where this one left off. `state_path=None` (main()'s `--in-memory` run)
+    instead builds an unpathed CalcState() and a plain InMemoryHistoryStore,
+    so nothing here ever touches disk.
+    """
+    state = CalcState(state_path)
+    history_store = InMemoryHistoryStore() if state_path is None else StateBackedHistoryStore(state)
+    server = build_server(port, history_store=history_store, state=state)
     host, bound_port = server.server_address[0], server.server_address[1]
     print(f"serving on http://{host}:{bound_port}", flush=True)
     try:
@@ -449,6 +594,12 @@ def main(argv=None):
     parser.add_argument("--version", action="store_true", help="print the version and exit")
     parser.add_argument("--port", type=int, default=None, help="start the HTTP server on this port")
     parser.add_argument(
+        "--state",
+        default="./graphcalc_state.json",
+        help="path to the JSON file variables, functions, history and lists are persisted to "
+        "(default: ./graphcalc_state.json)",
+    )
+    parser.add_argument(
         "--in-memory",
         action="store_true",
         help="keep variables, functions, lists and history in memory only",
@@ -458,6 +609,7 @@ def main(argv=None):
         print(f"graphcalc {__version__}")
         return 0
     if args.port is not None:  # pragma: no cover
-        return serve(args.port)
+        state_path = None if args.in_memory else args.state
+        return serve(args.port, state_path)
     parser.print_usage()
     return 2

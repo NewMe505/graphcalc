@@ -18,6 +18,31 @@ page (no build step, no CDN or other external resources) with four tabs:
 Calculator, Graphs, Lists & Statistics, and CAS. The page only draws what the
 JSON API returns.
 
+By default (no `--in-memory`), variables, functions, lists and history are
+held in memory and written through atomically to a JSON file at `--state
+PATH` (default `./graphcalc_state.json`, next to the current directory --
+pass an absolute path to pin it elsewhere), which is loaded again on
+startup -- `python -m graphcalc --port 8000` then `python -m graphcalc
+--port 8000` again (same `--state` path, the default) picks up right where
+the previous run left off: a variable defined with `"a:=5"` evaluates to
+`"5"` after the restart. The file is rewritten (temp file in the same
+directory, then an atomic rename) after every change, so it is always valid
+JSON, even if the process is killed mid-write. `--in-memory` disables all
+of this: nothing is read or written on disk, and nothing in `--state` has
+any effect. A state file that is missing, corrupt, or holds the wrong JSON
+shape is never fatal -- the server starts with empty defaults for whichever
+fields are unreadable instead of failing to start.
+
+`POST /api/state/reset` -- empties variables, functions, lists and history
+(and forgets `ans`) in one call, answering 200 `{"status": "reset"}`; with
+`--state` this is a single atomic write, and with `--in-memory` it touches
+no file at all.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/state/reset
+# {"status": "reset"}
+```
+
 The UI shell is served from two routes:
 - `GET /` -- `text/html`, the tab page (`tab-calculator`, `tab-graphs`,
   `tab-lists`, `tab-cas`, and a `graph-canvas` canvas on the Graphs tab).
@@ -211,6 +236,92 @@ The calculator's math goes through a JSON API, one endpoint per operation:
     -H "Content-Type: application/json" -d '{"expr": "pi:=3"}'
   # {"error": "cannot redefine constant pi"} -- not added to the history
   ```
+
+The graphing API is a single endpoint, stateless and also never a 500:
+`POST /api/graph/plot`'s body is `{"functions": {"f1".."f4": expr}, "window":
+{"xmin","xmax","ymin","ymax"}, "samples": int}`. Each `expr` goes through the
+same grammar, no-sympy-constructors whitelist and freeze guard as
+`/api/calc/evaluate` (always in radians), with `"x"` bound as the sole free
+variable -- it never sees stored variables, functions, or `ans` (an
+expression that resolves to a free variable other than `"x"`, e.g. `"a*x"` or
+`"ans"`, is a 400, not silently treated as a free symbol or zero). Answers
+200 with `{"x": [float, ...], "series": {name: {"color": "#rrggbb", "y":
+[float | null, ...]}}}`: `x` is `samples` evenly spaced floats from `xmin` to
+`xmax`, both ends included (the last one is pinned to the exact float `xmax`,
+not accumulated by repeated addition). Each `y` sample is `null` -- a gap in
+the curve, never a 400 or a dropped sample -- whenever that one sample is
+non-real (`"sqrt(x)"` at `x=-1`), infinite (`"1/x"` at `x=0`, sympy's own
+`zoo`), or `nan`; a function that is unconditionally undefined everywhere
+(e.g. `"1/0"`, which never mentions `x` at all) comes back as every sample
+`null`, and the request as a whole still answers 200 either way. `ymin`/
+`ymax` only bound what a client should draw -- they are validated but never
+clip or rescale a `y` value the server returns. `f1` through `f4` each get
+one fixed, distinct color from `graphcalc.graph.SERIES_COLORS`: `"#1f77b4"`,
+`"#d62728"`, `"#2ca02c"`, `"#9467bd"`. A 400 (`{"error": <message>}`) covers:
+a function slot outside `f1`-`f4` (a literal `"f5"`, or a fifth function,
+e.g. `"unknown function slot: 'f5'"`), a missing/empty/non-dict `functions`,
+a function expression that is not a string, a missing/non-dict `window` or a
+missing/non-numeric/non-finite `xmin`/`xmax`/`ymin`/`ymax` (the bare
+`Infinity`/`-Infinity`/`NaN` tokens Python's own `json` module otherwise
+decodes without error are rejected too), `xmin >= xmax` or `ymin >= ymax`
+(e.g. `"window xmin must be less than xmax"`), and a missing/non-int (a bool
+does not count) `samples` outside `[2, 10000]`. A parse error or an unknown
+function call in an `expr` (the same checks `/api/calc/evaluate` already
+makes) is a 400 too, never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/graph/plot \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "x^2"}, "window": {"xmin": -2, "xmax": 2, "ymin": -1, "ymax": 5}, "samples": 5}'
+# {"x": [-2.0, -1.0, 0.0, 1.0, 2.0], "series": {"f1": {"color": "#1f77b4", "y": [4.0, 1.0, 0.0, 1.0, 4.0]}}}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/plot \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "1/x"}, "window": {"xmin": -1, "xmax": 1, "ymin": -5, "ymax": 5}, "samples": 3}'
+# {"x": [-1.0, 0.0, 1.0], "series": {"f1": {"color": "#1f77b4", "y": [-1.0, null, 1.0]}}}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/plot \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "x", "f2": "x", "f3": "x", "f4": "x", "f5": "x"}, "window": {"xmin": -1, "xmax": 1, "ymin": -1, "ymax": 1}, "samples": 2}'
+# {"error": "unknown function slot: 'f5'"}
+```
+
+`POST /api/graph/window` turns one window into the next one, stateless --
+the server never remembers a "current" window across requests, so the
+client sends the window it already has (or none at all) and gets the next
+one back. Body `{"action": "zoom_in" | "zoom_out" | "pan" | "standard",
+"factor", "dx", "dy", "window"}`. `"standard"` ignores every other key and
+always answers the fixed `-10..10` window on both axes. Every other action
+defaults `"window"` (when absent or `null`) to that same standard `-10..10`
+window, otherwise `"window"` must be an object with finite, non-bool
+`xmin`/`xmax`/`ymin`/`ymax` (same rules as `/api/graph/plot`'s own window,
+including rejecting `xmin >= xmax` or `ymin >= ymax`). `"zoom_in"`/
+`"zoom_out"` need a finite, non-bool, strictly positive `"factor"`, and zoom
+about the window's own center: factor 2 halves (`zoom_in`) or doubles
+(`zoom_out`) each axis's half-span. `"pan"` needs finite, non-bool `"dx"`
+and `"dy"`, added straight onto `xmin`/`xmax` (`dx`) and `ymin`/`ymax`
+(`dy`) -- a pure translation, so the window's width and height are
+unchanged. Answers 200 with `{"xmin","xmax","ymin","ymax"}` as plain
+numbers -- an int when the result is a whole number, a float otherwise
+(e.g. zooming `-10..10` in by factor 2 answers `-5`, not `-5.0`). A 400
+(`{"error": <message>}`) covers any other `"action"` value, including a
+missing one, and the same bad-number rules as above. Never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/graph/window \
+  -H "Content-Type: application/json" \
+  -d '{"action": "zoom_in", "factor": 2, "window": {"xmin": -10, "xmax": 10, "ymin": -10, "ymax": 10}}'
+# {"xmin": -5, "xmax": 5, "ymin": -5, "ymax": 5}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/window \
+  -H "Content-Type: application/json" \
+  -d '{"action": "pan", "dx": 1, "dy": -2}'
+# {"xmin": -9, "xmax": 11, "ymin": -12, "ymax": 8} -- window defaults to standard -10..10
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/window \
+  -H "Content-Type: application/json" -d '{"action": "sideways"}'
+# {"error": "unknown action: 'sideways'"}
+```
 
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to

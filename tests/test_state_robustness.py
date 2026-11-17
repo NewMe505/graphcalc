@@ -161,10 +161,13 @@ def test_function_body_referencing_beta_stores_and_evaluates():
 
 
 def test_variable_and_function_with_beta_survive_reload_from_disk(tmp_path):
-    """Standing in for a process restart with the same --state path (the CLI
-    flag itself is a later feature, P9) -- see test_calc_definitions.py's
+    """Standing in for a process restart with the same --state path -- see
+    test_calc_definitions.py's
     test_variable_survives_server_restart_on_same_state_file for the same
-    pattern. Without "variable_sreprs"/"function_sreprs" surviving the round
+    pattern (and tests/test_p9_state_persistence.py::
+    test_p9_restart_persists_variable for the same check through the real
+    CLI subprocess and --state flag). Without "variable_sreprs"/
+    "function_sreprs" surviving the round
     trip to disk, the reloaded server would fall back to plain sympify() of
     "beta + 1"/"beta*x", which raises, turning "a" and "g(2)" into 400s --
     this is the test that actually catches a missing srepr on disk."""

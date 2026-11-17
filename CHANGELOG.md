@@ -166,6 +166,86 @@
   unaffected, since it is only ever set from a plain evaluation (P26/S1,
   P30), never a definition's right-hand side. Added
   `tests/test_p32_definitions_in_history.py`.
+- Disk-persisted state (P9): variables, functions, lists (an empty `{}` for
+  now -- P15 adds CRUD for named lists) and history are held in memory and
+  written through atomically to a JSON file at `--state PATH` (default
+  `./graphcalc_state.json`), which is loaded again on startup -- after
+  `{"expr": "a:=5"}` with `--state S`, restarting the server with the same
+  `--state S` and evaluating `{"expr": "a"}` answers exact `"5"`. Each write
+  is a temp file in the state file's own directory followed by an atomic
+  `os.replace`, so the file parses as valid JSON after every change, even if
+  the process is killed mid-write. `--in-memory` disables all of this: no
+  file is ever read or written, and `--state` has no effect. New `POST
+  /api/state/reset` empties variables, functions, lists and history (and
+  forgets `ans`) in one call, answering 200 `{"status": "reset"}` -- one
+  atomic write with `--state`, no file at all with `--in-memory`. History
+  moved behind a new `graphcalc.history.StateBackedHistoryStore`, so one
+  JSON file now backs both variables/functions and history; `--in-memory`
+  still uses the existing plain `InMemoryHistoryStore`. Bug #14 (load-time):
+  a state file that is missing, unreadable, not valid JSON, or has the
+  wrong JSON shape at the top level or for any individual field (e.g.
+  `"variables"` hand-edited into a string) never raises on load -- the
+  affected field(s) simply fall back to their empty default, so a corrupt
+  state file can never break evaluation; a load failure also never writes,
+  so the corrupt file is left alone until the next real change overwrites
+  it with a valid one. `.gitignore` now lists `graphcalc_state.json`. Added
+  `graphcalc/state.py`'s file I/O (`CalcState`), `graphcalc.history.
+  StateBackedHistoryStore`, and `tests/test_p9_state_persistence.py`
+  (restarts a real server subprocess on the same `--state` path).
+- `POST /api/graph/plot` (P10): samples up to four functions (`"f1"`..`"f4"`)
+  over a window. Body `{"functions": {"f1".."f4": expr}, "window":
+  {"xmin","xmax","ymin","ymax"}, "samples": int}` answers 200 `{"x": [float,
+  ...], "series": {name: {"color": "#rrggbb", "y": [float | null, ...]}}}`:
+  `x` is `samples` evenly spaced floats from `xmin` to `xmax` inclusive (the
+  last one pinned to the exact float `xmax`, never accumulated by repeated
+  addition). Each `y` sample is `null` -- a gap in the curve, status still
+  200 -- whenever that sample is non-real (`"sqrt(x)"` at `x=-1`), infinite
+  (`"1/x"` at `x=0`, sympy's own `zoo`), or `nan`; a function that is
+  unconditionally undefined everywhere (e.g. `"1/0"`) comes back as every
+  sample `null`. `f1`-`f4` each get one fixed, distinct color from new
+  `graphcalc.graph.SERIES_COLORS` (`"#1f77b4"`, `"#d62728"`, `"#2ca02c"`,
+  `"#9467bd"`). Reuses `graphcalc.calc.evaluate()` for parsing each
+  expression, with `"x"` bound as the sole free variable -- the same
+  grammar, no-sympy-constructors whitelist and `is_power_too_large` freeze
+  guard `/api/calc/evaluate` already enforces apply here too, and
+  `graphcalc.calc.CalcError` (bad syntax, an unknown function call, an
+  oversized power) escapes `graph.plot()` unchanged and is a 400 here as
+  well, not just the new `graphcalc.graph.GraphError`. 400 also covers: a
+  function slot outside `f1`-`f4` (a literal `"f5"`, or a fifth function), a
+  missing/empty/non-dict `functions`, a non-string function expression, a
+  missing/non-dict `window` or a missing/non-numeric/non-finite `xmin`/
+  `xmax`/`ymin`/`ymax` (`Infinity`/`-Infinity`/`NaN`, which Python's own
+  `json` module otherwise decodes without error, are rejected too),
+  `xmin >= xmax` or `ymin >= ymax`, a missing/non-int (bool excluded)
+  `samples` outside `[2, 10000]`, and a function expression mentioning a
+  free variable other than `"x"` (e.g. `"a*x"`, `"ans"`). Never a 500.
+  Stateless -- unlike `/api/calc/evaluate`, it never reads or writes the
+  server's stored variables, functions, `ans`, or history. Added
+  `graphcalc/graph.py` (`plot`, `GraphError`, `SERIES_COLORS`,
+  `MIN_SAMPLES`/`MAX_SAMPLES`) and `tests/test_p10_graph_plot.py`.
+- `POST /api/graph/window` (P11): turns one window into the next, also
+  stateless -- the server never remembers a "current" window across
+  requests. Body `{"action": "zoom_in" | "zoom_out" | "pan" | "standard",
+  "factor", "dx", "dy", "window"}` answers 200 `{"xmin","xmax","ymin",
+  "ymax"}` as plain numbers (an int when the result is a whole number, a
+  float otherwise, e.g. zooming `-10..10` in by factor 2 answers `-5`, not
+  `-5.0`). `"standard"` ignores every other key and always answers the
+  fixed `-10..10` window on both axes. Every other action defaults
+  `"window"` (absent or `null`) to that same standard `-10..10` window,
+  otherwise `"window"` must be an object with finite, non-bool `xmin`/
+  `xmax`/`ymin`/`ymax` and `xmin < xmax`/`ymin < ymax`, the same rules
+  `/api/graph/plot` enforces on its own window. `"zoom_in"`/`"zoom_out"`
+  need a finite, non-bool, strictly positive `"factor"`, and zoom about the
+  window's own center: factor 2 halves (`zoom_in`, `-10..10` -> `-5..5`) or
+  doubles (`zoom_out`, `-10..10` -> `-20..20`) each axis's half-span,
+  recentered on the unchanged midpoint. `"pan"` needs finite, non-bool
+  `"dx"`/`"dy"`, added straight onto `xmin`/`xmax` (`dx`) and `ymin`/`ymax`
+  (`dy`) -- a pure translation, so the window's width and height are
+  unchanged (`{"action":"pan","dx":1,"dy":-2}` on the standard window ->
+  `{"xmin":-9,"xmax":11,"ymin":-12,"ymax":8}`). Any other `"action"`,
+  including a missing one, is a 400 (`{"error": "unknown action: ..."}`),
+  same as a bad factor/dx/dy/window. Never a 500. Added
+  `graphcalc.graph.window` and `tests/test_p11_graph_window.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

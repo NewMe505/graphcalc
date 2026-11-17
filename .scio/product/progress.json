@@ -83,6 +83,21 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/31",
       "merged_commit": "3785c187155dca9db3550fcc107d70545374172d",
       "usd": 9.329
+    },
+    {
+      "id": "M6",
+      "title": "Disk-persisted state and graph plot/window API",
+      "status": "done",
+      "branch": "milestone/6",
+      "features": [
+        "P9",
+        "P10",
+        "P11"
+      ],
+      "pr_number": 35,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/35",
+      "merged_commit": "3e682aa21d4e1f8e14b9a38ef526f82ece1cf1a6",
+      "usd": 9.2876
     }
   ],
   "features": [
@@ -169,32 +184,32 @@
     {
       "id": "P9",
       "description": "Variables, functions, lists and history are held in memory and written through atomically to a JSON file (--state PATH, default ./graphcalc_state.json), which is loaded again on startup. --in-memory turns off disk writes.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "2d683be823fc5487c6e8068f871b2b797a7edad8",
+      "thread": "build-graphcalc-m4-p9-a1",
+      "tier": "T1",
+      "issue": 32,
+      "usd": 4.3681
     },
     {
       "id": "P10",
       "description": "POST /api/graph/plot takes {\"functions\":{\"f1\"..\"f4\":expr},\"window\":{\"xmin\",\"xmax\",\"ymin\",\"ymax\"},\"samples\":int} and answers {\"x\":[numbers],\"series\":{\"f1\":{\"color\":\"#rrggbb\",\"y\":[number|null]}}}. Non-real, infinite or nan y-values are null so the curve shows a gap.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "83f60e8b62cc9feae650a1eae65f2d5d5befd7f3",
+      "thread": "build-graphcalc-m4-p10-a1",
+      "tier": "T1",
+      "issue": 33,
+      "usd": 3.7839
     },
     {
       "id": "P11",
       "description": "POST /api/graph/window takes {\"action\":\"zoom_in\"|\"zoom_out\"|\"pan\"|\"standard\",\"factor\",\"dx\",\"dy\",\"window\"} and answers {\"xmin\",\"xmax\",\"ymin\",\"ymax\"}; standard is -10..10 on both axes.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "b4537d8f8c5355b1395a55ed10fd5477d3af433f",
+      "thread": "build-graphcalc-m4-p11-a1",
+      "tier": "T0",
+      "issue": 34,
+      "usd": 1.1356
     },
     {
       "id": "P12",
@@ -417,5 +432,5 @@
       "usd": 1.2521
     }
   ],
-  "updated": "2026-11-15T20:57:38+00:00"
+  "updated": "2026-11-17T11:44:44+00:00"
 }

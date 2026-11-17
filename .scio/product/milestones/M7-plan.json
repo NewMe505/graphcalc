@@ -1,0 +1,46 @@
+{
+ "number": 7,
+ "title": "Graph analysis, value table and Graphs tab UI",
+ "branch": "milestone/7",
+ "features": [
+  {
+   "id": "P12",
+   "tier": "T1",
+   "notes": "Parse f and g with the evaluator's grammar and safety checks (P23/P27/P28), not raw sympify. Use the existing 12-digit formatter. Find roots and extrema numerically in [lower, upper] and snap to exact values. No zero or intersection: 200 with domain_error. Bad operation, missing parameter or lower >= upper: 400.",
+   "depends_on": [],
+   "files": [
+    "graphcalc/graph.py",
+    "graphcalc/server.py",
+    "tests/test_graph_analyze.py"
+   ]
+  },
+  {
+   "id": "P13",
+   "tier": "T0",
+   "notes": "Reuse P10's sampling and f1-f4 validation. Give x as decimal strings (\"0.5\"). A non-real value is null. Step 0, rows < 1 or rows > 1000 answer 400.",
+   "depends_on": [
+    "P12"
+   ],
+   "files": [
+    "graphcalc/graph.py",
+    "graphcalc/server.py",
+    "tests/test_graph_table.py"
+   ]
+  },
+  {
+   "id": "P14",
+   "tier": "T1",
+   "notes": "Plain JS, no external resources. Draw the API's series on graph-canvas with gaps where y is null. Keep long-text wrapping (P33). Leave the Calculator tab's ids and behaviour unchanged.",
+   "depends_on": [
+    "P12",
+    "P13"
+   ],
+   "files": [
+    "graphcalc/static/index.html",
+    "graphcalc/static/app.js",
+    "graphcalc/static/style.css",
+    "tests/test_graph_ui.py"
+   ]
+  }
+ ]
+}

@@ -246,6 +246,88 @@
   including a missing one, is a 400 (`{"error": "unknown action: ..."}`),
   same as a bad factor/dx/dy/window. Never a 500. Added
   `graphcalc.graph.window` and `tests/test_p11_graph_window.py`.
+- `POST /api/graph/analyze` (P12/S1): `"value"` and `"zero"`, plus the
+  request validation shared by every operation (`"minimum"`, `"maximum"`
+  and `"intersection"` are validated here but not computed until a later
+  step). Body `{"operation": "value"|"zero"|"minimum"|"maximum"|
+  "intersection", "f", "g" (`"intersection"` only), "x" (`"value"` only),
+  "lower", "upper" (every other operation)}` answers 200 `{"operation",
+  "x", "y", "domain_error"}`, with `x`/`y` each a 12-significant-digit
+  decimal string (`graphcalc.numfmt.format_decimal`) or `null`. `"value"`
+  substitutes `x` into `f` (`"x^2+1"` at `x=3` -> `x "3"`, `y "10"`); a
+  gap (e.g. `"1/x"` at `x=0`) answers 200 with `y` `null` and a
+  `domain_error` instead, `x` still formatted. `"zero"` scans
+  `[lower, upper]` for a sign change or a near-zero sample, refines it by
+  bisection, and snaps the result to an exact value with sympy
+  `nsimplify` when one still solves the equation within tolerance
+  (`"x^2-4"` on `[0,5]` -> `x "2"`, `y "0"`); no root in the interval
+  answers 200 with `x`/`y` both `null` and `domain_error`
+  `"no zero in interval"` -- not a 400. `f` (and `g`) are parsed with
+  `graphcalc.calc.evaluate()`, same as `/api/graph/plot`, so
+  `graphcalc.calc.CalcError` escapes unchanged and is a 400 here too, not
+  just the new `graphcalc.graph.GraphError`. 400 also covers: an unknown
+  `operation`, a missing/non-string `f` (or `g`, for `"intersection"`), a
+  missing/non-numeric/non-finite `x` (`"value"`) or `lower`/`upper`
+  (every other operation), and `lower >= upper`. Never a 500. Added
+  `graphcalc.graph.analyze` (plus `GraphError`, `DOMAIN_ERROR_NO_ZERO`,
+  `DOMAIN_ERROR_NO_VALUE`, `ANALYZE_OPERATIONS`), `graphcalc.cli.
+  _handle_graph_analyze`, and `tests/test_p12_graph_analyze.py`.
+- `POST /api/graph/table` (P13/S1): a value table for up to four functions,
+  stateless like `/api/graph/plot`, `/api/graph/window` and
+  `/api/graph/analyze`. Body `{"functions": {"f1".."f4": expr}, "start",
+  "step", "rows"}` answers 200 `{"x": [str, ...], "columns": {name: [str |
+  null, ...]}}`: `"x"` is `rows` values of `start + index * step` -- a plain
+  arithmetic sequence, not `/api/graph/plot`'s evenly-spaced-between-two-ends
+  `"x"` -- and both `"x"` and every column entry are
+  `graphcalc.numfmt.format_decimal` strings (12 significant digits), e.g.
+  `{"functions": {"f1": "x^2"}, "start": 0, "step": 0.5, "rows": 3}` ->
+  `x ["0", "0.5", "1"]`, `columns.f1 ["0", "0.25", "1"]`. A non-real or
+  undefined sample (`"sqrt(x)"` at `x=-1`, `"1/x"` at `x=0`) is `null` in
+  that column -- the same gap rule `/api/graph/plot`/`/api/graph/analyze`
+  already apply -- never a 400 for one bad sample; the request as a whole
+  still answers 200. Each function is parsed with the same
+  `_parse_function`/`_evaluate_at` pair `/api/graph/plot` samples with, so
+  `graphcalc.calc.CalcError` (bad syntax, an unknown function call, an
+  oversized power) is a 400 here too, not just the new
+  `graphcalc.graph.GraphError`. 400 also covers: `/api/graph/plot`'s own
+  `functions` validation (a slot outside `f1`-`f4`, a missing/empty/non-dict
+  `functions`, a non-string expression), a missing/non-numeric/non-finite
+  `start` or `step`, `step` equal to `0` (would otherwise repeat `start`
+  forever without advancing the table), and a missing/non-int (a bool does
+  not count) `rows` outside `[1, 1000]` (`MIN_ROWS`/`MAX_ROWS`). Never a 500.
+  Added `graphcalc.graph.table` (plus `MIN_ROWS`/`MAX_ROWS`),
+  `graphcalc.cli._handle_graph_table`, and `tests/test_p13_graph_table.py`.
+- Graphs tab UI (P14): `GET /` now ships a working Graphs tab, not just the
+  static `graph-canvas` shell. `graphcalc/static/index.html` gains 17 new
+  ids inside `tab-graphs`: `graph-f1`..`graph-f4`, the window inputs
+  `graph-xmin`/`graph-xmax`/`graph-ymin`/`graph-ymax`, `graph-zoom-in`/
+  `graph-zoom-out`, the four pan buttons `graph-pan-left`/`graph-pan-right`/
+  `graph-pan-up`/`graph-pan-down`, `graph-trace-x`, `graph-analyze`, and a
+  new `graph-table` `<table>`. `graphcalc/static/app.js` wires all four
+  graph endpoints: a `change` on any function/window input (or Enter in
+  one) POSTs `/api/graph/plot` with only the non-empty `f1`-`f4` slots and
+  `samples` set to the canvas's own pixel width, then draws each returned
+  series onto `graph-canvas` by mapping the window to pixel coordinates and
+  breaking the path wherever that series' `y` sample is `null`, so a domain
+  gap is never bridged by a straight line; the zoom/pan buttons POST
+  `/api/graph/window` (`zoom_in`/`zoom_out` at factor 2, `pan` by a quarter
+  of the current window's width/height) and write the response straight
+  back into the window inputs before replotting; those same inputs are
+  seeded on load from a real `{"action": "standard"}` call rather than a
+  hard-coded `-10..10` literal; `graph-trace-x` plus `graph-analyze` POST
+  `{"operation": "value", "f": <first non-empty function slot>, "x":
+  <trace-x value>}` to `/api/graph/analyze` and show the result or its
+  `domain_error` in a plain status line `app.js` creates under the Analyze
+  button (no id of its own); and after every successful plot, `graph-table`
+  is rebuilt automatically, with no separate button, from
+  `/api/graph/table` (21 rows from `xmin`, step `(xmax - xmin) / 20`, one
+  column per non-empty function slot, a `null` cell rendered blank). A 400
+  from any of the four endpoints shows its `error` message in that same
+  status line. The Calculator tab's own ids and wiring are unchanged. Added
+  `tests/test_p14_graphs_ui.py`, pinning both acceptance criteria: `GET /`
+  contains each of those 17 ids exactly once (and `graph-canvas`, added in
+  an earlier step, is still a `<canvas>`) and `GET /static/app.js` mentions
+  the four `/api/graph/*` paths.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

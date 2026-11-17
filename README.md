@@ -360,6 +360,42 @@ curl -s -X POST http://127.0.0.1:8000/api/graph/table \
 # {"error": "step must not be zero"}
 ```
 
+`POST /api/stats/onevar` computes one-variable statistics for a list already
+stored via `PUT /api/lists/<name>` (full list CRUD documentation is a
+follow-up -- see NOTES.md). Body `{"list": name}` answers 200 with
+`{"n": int, "mean", "median", "sum", "sx", "sigma_x", "min", "q1", "q3",
+"max"}`, each of the latter nine an `{"exact", "decimal"}` pair (`decimal` is
+the usual 12-significant-digit string). `sx` is the sample standard
+deviation (divides the sum of squared deviations by `n - 1`), `sigma_x` is
+the population standard deviation (divides by `n`), and `q1`/`q3` use the TI
+quartile method: each is the median of the sorted list's lower/upper half,
+leaving the overall median out of both halves when `n` is odd (`[1,2,3,4,5]`
+splits into `[1,2]`/`[4,5]`, never a half that still contains `3`), and
+splitting into two equal halves with nothing left out when `n` is even. A
+missing or non-string `"list"`, a malformed name, an undefined list name, or
+a stored list that is empty each answer 400 -- never the 404
+`GET /api/lists/<name>` gives for an unknown name, since this route's only
+successful response is a full statistics summary.
+
+```
+curl -s -X PUT http://127.0.0.1:8000/api/lists/L1 \
+  -H "Content-Type: application/json" \
+  -d '{"values": ["1", "2", "3", "4", "5"]}'
+# {"name": "L1", "values": ["1", "2", "3", "4", "5"]}
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/onevar \
+  -H "Content-Type: application/json" -d '{"list": "L1"}'
+# {"n": 5, "mean": {"exact": "3", "decimal": "3"}, "median": {"exact": "3", "decimal": "3"},
+#  "sum": {"exact": "15", "decimal": "15"}, "sx": {"exact": "sqrt(10)/2", "decimal": "1.58113883008"},
+#  "sigma_x": {"exact": "sqrt(2)", "decimal": "1.41421356237"}, "min": {"exact": "1", "decimal": "1"},
+#  "q1": {"exact": "3/2", "decimal": "1.5"}, "q3": {"exact": "9/2", "decimal": "4.5"},
+#  "max": {"exact": "5", "decimal": "5"}}
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/onevar \
+  -H "Content-Type: application/json" -d '{"list": "NOPE"}'
+# {"error": "no such list: NOPE"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and

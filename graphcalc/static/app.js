@@ -905,4 +905,96 @@
       listsTabButton.addEventListener("click", loadLists);
     }
   }
+
+  // ---- CAS tab: wired to /api/cas/simplify, /expand, /factor, /derivative,
+  // /integral, /limit and /solve (plan step P22/S2). Same as the
+  // Calculator, Graphs and Lists & Statistics tabs above, the page only
+  // draws what the API returns -- no client-side math, ever.
+  var CAS_SIMPLIFY_PATH = "/api/cas/simplify";
+  var CAS_EXPAND_PATH = "/api/cas/expand";
+  var CAS_FACTOR_PATH = "/api/cas/factor";
+  var CAS_DERIVATIVE_PATH = "/api/cas/derivative";
+  var CAS_INTEGRAL_PATH = "/api/cas/integral";
+  var CAS_LIMIT_PATH = "/api/cas/limit";
+  var CAS_SOLVE_PATH = "/api/cas/solve";
+
+  var casInput = document.getElementById("cas-input");
+  var casVar = document.getElementById("cas-var");
+  var casOp = document.getElementById("cas-op");
+  var casSubmit = document.getElementById("cas-submit");
+  var casOutput = document.getElementById("cas-output");
+
+  if (casSubmit) {
+    // Maps cas-op's own <option> values to each op's endpoint path.
+    var CAS_OP_PATHS = {
+      simplify: CAS_SIMPLIFY_PATH,
+      expand: CAS_EXPAND_PATH,
+      factor: CAS_FACTOR_PATH,
+      derivative: CAS_DERIVATIVE_PATH,
+      integral: CAS_INTEGRAL_PATH,
+      limit: CAS_LIMIT_PATH,
+      solve: CAS_SOLVE_PATH,
+    };
+
+    function casShowOutput(message) {
+      casOutput.textContent = message || "";
+    }
+
+    // Builds the right POST body for the chosen op: {"expr"} for
+    // simplify/expand/factor, {"expr","var"} for derivative/integral/limit,
+    // and {"equation","var"} for solve -- the field names confirmed against
+    // graphcalc/cli.py's own _handle_cas_* handlers (cli.py:899-1170).
+    function casBuildPayload(op) {
+      if (op === "solve") {
+        return { equation: casInput.value, var: casVar.value };
+      }
+      if (op === "derivative" || op === "integral" || op === "limit") {
+        return { expr: casInput.value, var: casVar.value };
+      }
+      return { expr: casInput.value };
+    }
+
+    // Reads cas-op, POSTs the matching payload to that op's own endpoint,
+    // and writes the response's "result" (or, for solve, its "solutions"
+    // list joined by ", ") into cas-output -- or, on a 400, that response's
+    // own "error" message, replacing whatever cas-output already showed
+    // either way (the same "last submit wins" rule every other tab's own
+    // status/error element already follows).
+    function casSubmitExpression() {
+      var op = casOp.value;
+      var path = CAS_OP_PATHS[op];
+      fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(casBuildPayload(op)),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            casShowOutput(result.data.error || "error");
+            return;
+          }
+          if (op === "solve") {
+            casShowOutput((result.data.solutions || []).join(", "));
+          } else {
+            casShowOutput(result.data.result);
+          }
+        })
+        .catch(function (err) {
+          casShowOutput(String(err));
+        });
+    }
+
+    casSubmit.addEventListener("click", casSubmitExpression);
+    casInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        casSubmitExpression();
+      }
+    });
+  }
 })();

@@ -1,4 +1,5 @@
-"""Tests for plan step P22/S1: the CAS tab's markup.
+"""Tests for plan steps P22/S1 and P22/S2: the CAS tab's markup, and
+app.js's own wiring to all seven CAS endpoints.
 
 PRODUCT.md's first P22 acceptance criterion ("GET / contains elements with
 ids cas-input, cas-var, cas-op, cas-submit and cas-output") is a
@@ -7,12 +8,20 @@ test_p18_index_has_lists_stats_ids and tests/test_p14_graphs_ui.py's own
 test_p14_index_graph_ids already use for their own tabs: start the real
 server, GET /, and check every required id is present exactly once.
 
-This step only adds the markup (plan step S1); app.js's own wiring to the
-seven /api/cas/* endpoints is a later step and is not tested here. The page
-must still load no external resources, the same way tests/test_static.py's
-own test_static_security_no_external_urls already checks for the whole
-page -- this module re-checks it narrowly against the CAS panel's own
-markup so a regression there is caught right where it was introduced.
+Plan step S1 only added the markup; app.js's own wiring to the seven
+/api/cas/* endpoints is plan step S2, proven by test_app_js_cas_paths
+below -- the same style tests/test_p18_lists_ui.py's own
+test_p18_app_js_has_lists_stats_paths and tests/test_p14_graphs_ui.py's
+own test_p14_appjs_graph_paths already use for their own tabs: GET
+/static/app.js and check every path the CAS tab's own wiring POSTs to is
+present as a literal string. The real browser-driven behaviour that
+wiring produces is proven separately by tests/acceptance/test_p22_cas.py.
+
+The page must still load no external resources, the same way
+tests/test_static.py's own test_static_security_no_external_urls already
+checks for the whole page -- this module re-checks it narrowly against
+the CAS panel's own markup so a regression there is caught right where it
+was introduced.
 """
 
 import re
@@ -139,3 +148,39 @@ def test_cas_output_wraps_long_text():
 
     assert "white-space" in tag_html and "pre-wrap" in tag_html, tag_html
     assert "overflow-wrap" in tag_html and "anywhere" in tag_html, tag_html
+
+
+def test_app_js_cas_paths():
+    """Plan step P22/S2: app.js wires the CAS tab to all seven endpoints.
+
+    Same style as tests/test_p18_lists_ui.py's own
+    test_p18_app_js_has_lists_stats_paths and tests/test_p14_graphs_ui.py's
+    own test_p14_appjs_graph_paths: GET /static/app.js and check every
+    path the CAS tab's own wiring (plan step P22/S2) POSTs to is present
+    as a literal string.
+    """
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urllib.request.urlopen(base + "/static/app.js") as res:
+            assert res.status == 200
+            script = res.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    for path in (
+        "/api/cas/simplify",
+        "/api/cas/expand",
+        "/api/cas/factor",
+        "/api/cas/derivative",
+        "/api/cas/integral",
+        "/api/cas/limit",
+        "/api/cas/solve",
+    ):
+        assert path in script, path
+
+    # The other tabs' own wiring must stay unchanged.
+    assert "/api/calc/evaluate" in script
+    assert "/api/graph/plot" in script
+    assert "/api/lists" in script

@@ -379,6 +379,27 @@
   (new `_evaluate_list_expression`/`_list_lengths_or_raise` helpers), and
   `graphcalc/cli.py`'s calc-evaluate handler now passes
   `lists=_state(handler).lists()` into every call.
+- `POST /api/stats/regression` (P17): least-squares curve fit for `x`/`y`
+  data sent directly in the request body. Body `{"model":
+  "linear"|"quadratic", "x": [str], "y": [str]}` answers 200 with
+  `{"model", "coefficients": {"a","b"[,"c"]}, "r2", "points": [[x,y], ...],
+  "curve": [[x,y], ...]}`: `"linear"` solves `y = a*x + b` and `"quadratic"`
+  solves `y = a*x**2 + b*x + c`, each from the exact least-squares normal
+  equations (`graphcalc/stats.py`'s new `_fit_linear`/`_fit_quadratic`, via
+  `sympy.Matrix.solve()` for the quadratic 3x3 system) over exact
+  Rational/Integer arithmetic, never a float. Every coefficient, `r2`, and
+  every `"points"`/`"curve"` number is a 12-significant-digit decimal
+  string with a clean `"0"` rather than `"-0"` or `"1e-16"` for an exact
+  fit (e.g. `x [1,2,3]`, `y [2,4,6]` answers `a "2"`, `b "0"`, `r2 "1"`).
+  `"points"` echoes the request's own `(x, y)` pairs in their original
+  order (not sorted); `"curve"` holds 50 points evenly spaced across the
+  data's own `min(x)..max(x)` (both endpoints exact), each paired with the
+  fit's predicted `y`. An unrecognized `"model"`, a malformed/empty/
+  oversized `"x"`/`"y"` (reusing `graphcalc.lists.validate_list_values`), a
+  non-string or non-numeric entry, mismatched `"x"`/`"y"` lengths, too few
+  distinct x values for the model (fewer than 2 for `"linear"`, fewer than
+  3 for `"quadratic"`), or every `y` value equal (`r2` undefined) each
+  answer 400, never a 500. Added `tests/test_p17_regression.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

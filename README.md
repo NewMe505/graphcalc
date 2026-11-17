@@ -396,6 +396,45 @@ curl -s -X POST http://127.0.0.1:8000/api/stats/onevar \
 # {"error": "no such list: NOPE"}
 ```
 
+`POST /api/stats/regression` fits a least-squares curve to `x`/`y` data sent
+directly in the request body (not a stored list). Body `{"model":
+"linear"|"quadratic", "x": [str], "y": [str]}` answers 200 with `{"model",
+"coefficients": {"a","b"[,"c"]}, "r2", "points": [[x,y], ...], "curve":
+[[x,y], ...]}`: `"linear"` fits `y = a*x + b`, `"quadratic"` fits
+`y = a*x**2 + b*x + c`, both solved exactly (least-squares normal
+equations) from `x`/`y` parsed the same way a stored list's values are.
+Every coefficient, `r2`, and every `points`/`curve` number is a
+12-significant-digit decimal string with a clean `"0"` (never `"-0"` or
+`"1e-16"`) for an exact fit. `"points"` echoes the request's own `(x, y)`
+pairs in their original order; `"curve"` holds 50 points evenly spaced
+across `min(x)..max(x)` inclusive, each paired with the fit's predicted
+`y`. An unrecognized `"model"`, a malformed, empty, or mismatched-length
+`"x"`/`"y"`, a non-numeric entry, or a degenerate fit (fewer than 2
+distinct x values for `"linear"`, fewer than 3 for `"quadratic"`, or every
+`y` value equal) each answer 400 -- never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
+  -H "Content-Type: application/json" \
+  -d '{"model": "linear", "x": ["1", "2", "3"], "y": ["2", "4", "6"]}'
+# {"model": "linear", "coefficients": {"a": "2", "b": "0"}, "r2": "1",
+#  "points": [["1", "2"], ["2", "4"], ["3", "6"]],
+#  "curve": [["1", "2"], ["1.04081632653", "2.08163265306"], ..., ["3", "6"]]}
+# (50 points total, evenly spaced from x=1 to x=3)
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
+  -H "Content-Type: application/json" \
+  -d '{"model": "quadratic", "x": ["0", "1", "2", "3"], "y": ["1", "2", "5", "10"]}'
+# {"model": "quadratic", "coefficients": {"a": "1", "b": "0", "c": "1"}, "r2": "1",
+#  "points": [["0", "1"], ["1", "2"], ["2", "5"], ["3", "10"]],
+#  "curve": [["0", "1"], ["0.0612244897959", "1.00374843815"], ..., ["3", "10"]]}
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
+  -H "Content-Type: application/json" \
+  -d '{"model": "linear", "x": ["1", "2", "3"], "y": ["2", "4"]}'
+# {"error": "x and y must have the same length"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and

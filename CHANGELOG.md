@@ -484,3 +484,30 @@
   a real 1280x900 page and asserts `scrollWidth <= innerWidth`, plus a
   plain static-content check that `style.css` sets `overflow-wrap` or
   `word-break` on `body`/`.tab-panel`).
+- Bug #40 (P34): the Graphs tab no longer joins a curve across a vertical
+  asymptote -- `f1 "1/x"` in the `-5..5` window used to draw a near-vertical
+  line in f1's colour straight through `x = 0`, visually welding its two
+  branches together, even though `POST /api/graph/plot` (P10) already
+  answered `y: null` for the one sample exactly on the pole: with 600
+  evenly spaced samples across `-5..5`, the pole itself falls *between*
+  two samples, so both of its neighbours come back as large-but-finite
+  floats and the canvas drew straight through the gap. `tan(x)` at its
+  poles and `1/(x-1)` at `x = 1` had the same problem. Fixed entirely in
+  `graphcalc/static/app.js`'s canvas draw loop (`graphDrawSeries`), between
+  new `// P34-BEGIN`/`// P34-END` markers: a new pure helper,
+  `graphIsAsymptoteJump(y0, y1, ymin, ymax)`, now also breaks the path
+  between two consecutive samples when both are finite, they swing from
+  positive to negative (or back), and the swing is more than twice the
+  window's own height -- never on a mere `null` gap, which already broke
+  the path before this fix. A steep but still continuous curve such as
+  `f1 "10*x"` stays one unbroken line: its jump between adjacent samples is
+  nowhere near the window's height. `graphcalc/graph.py`'s `plot()` and the
+  `POST /api/graph/plot` contract (P10) are unchanged. Added
+  `tests/test_p34_asymptote_break.py` (checks the helper is defined inside
+  the markers and that `graphDrawSeries` calls it, then -- when `node` is on
+  `PATH` -- runs the extracted helper against the exact `y` arrays
+  `graph.plot()` returns, confirming it breaks `1/x`, `tan(x)` and
+  `1/(x-1)` at their poles but leaves `10*x` whole) and
+  `tests/acceptance/test_p34_asymptote.py` (a real headless-browser check
+  that reads `graph-canvas`'s own pixels for each case; skips if the
+  acceptance harness has no browser).

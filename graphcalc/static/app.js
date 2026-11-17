@@ -258,10 +258,42 @@
       }
     }
 
+    // P34-BEGIN
+    // Bug #40: a vertical asymptote (e.g. "1/x" at x=0) falls *between* two
+    // sampled x-values -- plot() (P10) only ever returns null for a sample
+    // exactly on the pole, so both neighbouring samples come back as huge
+    // but finite floats, one on each side. Without this check,
+    // graphDrawSeries below joins them with a near-vertical lineTo, drawing
+    // a line across the gap that visually welds the two branches together.
+    // A jump between two consecutive samples is treated as an asymptote --
+    // never part of the curve -- only when both samples are finite numbers,
+    // they swing from positive to negative (or back), and the swing is
+    // more than twice the window's own height (ymax - ymin). A steep but
+    // continuous curve such as "10*x" never swings by more than a small
+    // fraction of the window between two adjacent canvas-width samples, so
+    // it is never broken by this check (see NOTES.md for the one case this
+    // heuristic does not cover: an even steeper continuous line).
+    function graphIsAsymptoteJump(y0, y1, ymin, ymax) {
+      if (
+        typeof y0 !== "number" ||
+        typeof y1 !== "number" ||
+        !isFinite(y0) ||
+        !isFinite(y1)
+      ) {
+        return false;
+      }
+      if (!(y0 * y1 < 0)) {
+        return false;
+      }
+      return Math.abs(y1 - y0) > 2 * (ymax - ymin);
+    }
+    // P34-END
+
     // Draws each returned series on graph-canvas, mapping the window to
     // pixels and breaking the path wherever "y" is null -- a gap in the
     // domain (plan step P10's own series shape) must stay a gap, never a
-    // straight line drawn across it.
+    // straight line drawn across it -- and also wherever two consecutive
+    // finite samples jump across a vertical asymptote (bug #40, P34).
     function graphDrawSeries(win, xs, series) {
       Object.keys(series).forEach(function (name) {
         var entry = series[name];
@@ -270,19 +302,22 @@
         graphCtx.lineWidth = 2;
         graphCtx.beginPath();
         var drawing = false;
+        var prevY = null;
         xs.forEach(function (x, index) {
           var y = ys[index];
           if (y === null || y === undefined) {
             drawing = false;
+            prevY = null;
             return;
           }
           var point = graphToPixel(win, x, y);
-          if (drawing) {
+          if (drawing && !graphIsAsymptoteJump(prevY, y, win.ymin, win.ymax)) {
             graphCtx.lineTo(point[0], point[1]);
           } else {
             graphCtx.moveTo(point[0], point[1]);
             drawing = true;
           }
+          prevY = y;
         });
         graphCtx.stroke();
       });

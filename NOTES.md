@@ -9,6 +9,40 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P34 (2026-11-17): bug #40, asymptote break. `graphcalc/static/app.js`,
+  `tests/test_p34_asymptote_break.py`, `tests/acceptance/test_p34_asymptote.py`,
+  `tests/acceptance/conftest.py`.
+  - The break rule, `graphIsAsymptoteJump(y0, y1, ymin, ymax)` (between the
+    `// P34-BEGIN`/`// P34-END` markers in `app.js`): two *consecutive*
+    samples are treated as straddling a vertical asymptote -- never joined
+    by `lineTo`, instead starting a new sub-path with `moveTo` -- only when
+    both are finite numbers, they have opposite signs (`y0 * y1 < 0`), and
+    `abs(y1 - y0) > 2 * (ymax - ymin)`. This is deliberately client-side
+    and purely about the jump between neighbouring samples, not about any
+    single sample's magnitude: `graphcalc/graph.py`'s `plot()` (P10) is
+    untouched, and still only ever answers `null` for a sample landing
+    exactly on a pole (ignorable in practice -- with 600 evenly spaced
+    samples over a window such as `-5..5`, the step is irrational relative
+    to `pi/2`/`1`/`0`, so a pole is essentially never sampled exactly).
+  - Known limitation, not covered by any acceptance criterion: a
+    continuous but *very* steep line (e.g. `10000*x`, not `10*x`) can swing
+    by more than `2 * (ymax - ymin)` between two adjacent canvas-width
+    samples too, and would be wrongly broken. There is no way to tell that
+    case apart from a real asymptote using only two samples' y-values --
+    the page does no math of its own (sympy only runs server-side) and so
+    cannot evaluate a midpoint to check continuity. Flagged here rather
+    than worked around, since PRODUCT.md's own criteria only exercise
+    `10*x`.
+  - `tests/acceptance/conftest.py` gained two fixtures this step needed and
+    the harness didn't have yet: `browser` (module-scoped Playwright
+    Chromium, `pytest.importorskip`'d and skipped -- never failed -- if
+    launch fails) and `live_server` (an in-process `HTTPServer`, the same
+    pattern `tests/test_p14_graphs_ui.py`/`tests/test_calc_ui.py` already
+    use, independent of the `APP_URL` env var `app_url` requires). Follows
+    `tests/test_p33_wrapping.py`'s existing precedent of driving a real
+    page with Playwright for a check plain HTML parsing can't make
+    (canvas pixels here, `scrollWidth` there).
+
 - P14 (2026-11-17): Graphs tab UI. `graphcalc/static/index.html`,
   `graphcalc/static/app.js`, `graphcalc/static/style.css`,
   `tests/test_p14_graphs_ui.py`.

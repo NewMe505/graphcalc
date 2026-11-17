@@ -52,6 +52,15 @@ intersection" is not an error -- it is a 200 with "x"/"y" None and
 missing parameter, or lower >= upper is a 400, the same as a bad
 expression graphcalc.calc.evaluate itself rejects. Also stateless, like
 /api/graph/plot and /api/graph/window.
+
+POST /api/graph/table (plan step P13) lives next to all three -- see
+_handle_graph_table, which defers to graphcalc.graph.table(). The
+request is {"functions": {"f1".."f4": expr}, "start", "step", "rows"};
+the response is {"x": [str, ...], "columns": {name: [str | None, ...]}},
+with "x" and every column entry a 12-significant-digit decimal string or
+None for a non-real/undefined sample. A bad function slot, a missing/
+non-finite "start"/"step", a zero "step", or "rows" outside [1, 1000] is
+a 400. Also stateless, like the other three graph routes.
 """
 
 import argparse
@@ -73,6 +82,7 @@ STATE_RESET_PATH = "/api/state/reset"
 GRAPH_PLOT_PATH = "/api/graph/plot"
 GRAPH_WINDOW_PATH = "/api/graph/window"
 GRAPH_ANALYZE_PATH = "/api/graph/analyze"
+GRAPH_TABLE_PATH = "/api/graph/table"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -537,6 +547,47 @@ def _handle_graph_analyze(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_graph_table(handler):
+    """POST /api/graph/table: {"functions","start","step","rows"} ->
+    graph.table's dict, 200 JSON (plan step P13/S1).
+
+    A malformed body, a non-object body, or a graphcalc.graph.GraphError
+    (a bad function slot, a missing/non-finite "start"/"step", a zero
+    "step", or "rows" outside [1, 1000]) is a JSON 400. graphcalc.calc.
+    CalcError -- bad syntax, an unknown function call, or an expression
+    the freeze guard flags, all of which graph.table() can raise
+    unchanged, via graphcalc.graph._parse_function reusing graphcalc.
+    calc.evaluate -- is also a JSON 400 here, not just GraphError (same
+    dual-exception contract as _handle_graph_plot and
+    _handle_graph_analyze; see graphcalc.graph's own module docstring).
+    The catch-all at the very end is this handler's own backstop for
+    anything else: this endpoint must never answer with a 500.
+
+    graphcalc.graph is imported lazily, the same reason graphcalc.calc is
+    imported lazily in _handle_calc_evaluate: every other route keeps
+    working even if sympy were ever unavailable.
+    """
+    from graphcalc import calc, graph
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = graph.table(payload)
+        except (graph.GraphError, calc.CalcError) as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -553,6 +604,7 @@ class Handler(BaseHTTPRequestHandler):
     - POST /api/graph/plot      -> see _handle_graph_plot
     - POST /api/graph/window    -> see _handle_graph_window
     - POST /api/graph/analyze   -> see _handle_graph_analyze
+    - POST /api/graph/table     -> see _handle_graph_table
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -589,6 +641,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == GRAPH_ANALYZE_PATH:
             _handle_graph_analyze(self)
+            return
+        if self.path == GRAPH_TABLE_PATH:
+            _handle_graph_table(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

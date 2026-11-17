@@ -1,5 +1,6 @@
-"""Graphing core for POST /api/graph/plot, POST /api/graph/window and
-POST /api/graph/analyze (plan steps P10/S1, P11/S1 and P12/S1).
+"""Graphing core for POST /api/graph/plot, POST /api/graph/window,
+POST /api/graph/analyze and POST /api/graph/table (plan steps P10/S1,
+P11/S1, P12/S1 and P13/S1).
 
 plot(body) and window(body) are the only things graphcalc/cli.py calls
 from here; neither ever touches the network. plot() deliberately does
@@ -40,6 +41,18 @@ GraphError for a bad request, or calc.CalcError unchanged from
 _parse_function. "intersection" (P12/S3) parses both "f" and "g", then
 reuses the exact same zero-finder on h = f - g; see analyze()'s own
 docstring.
+
+table() (plan step P13/S1) reuses plot()'s own "functions" validation --
+a missing/non-dict "functions", an unknown slot outside f1-f4, or a
+non-string expression, is the exact same GraphError plot() would raise
+for the same input -- and the same _parse_function/_evaluate_at pair
+plot() samples with, just evenly spaced from "start" by "step" (a plain
+arithmetic sequence, not plot()'s own xmin/xmax/samples window) instead.
+Unlike plot(), whose "x" and each series' "y" are plain floats/None for
+direct chart plotting, table()'s "x" and each column's values are
+numfmt.format_decimal strings (or None for a non-real/undefined sample)
+-- a value table reads like analyze()'s "x"/"y" strings, not like a
+plot series.
 """
 
 import math
@@ -971,4 +984,91 @@ def analyze(body):
         "x": format_decimal(x_display, sig=12),
         "y": format_decimal(y_display, sig=12),
         "domain_error": None,
+    }
+
+
+# POST /api/graph/table (plan step P13/S1).
+
+# "rows < 1 or rows > 1000 answer 400" (planner notes): at least one row,
+# so there is always something to show, and at most 1000, generously more
+# than any value-table UI needs, so a client cannot force this
+# single-threaded server into building (and parsing/substituting into) an
+# unbounded list -- the same reasoning as plot()'s own MIN_SAMPLES/
+# MAX_SAMPLES, just with this operation's own bounds.
+MIN_ROWS = 1
+MAX_ROWS = 1000
+
+
+def table(body):
+    """Build the POST /api/graph/table response dict for `body` (plan
+    step P13/S1).
+
+    `body` is {"functions": {"f1".."f4": expr}, "start", "step", "rows"}.
+    Returns {"x": [str, ...], "columns": {name: [str | None, ...]}}, with
+    "x" and every column entry a numfmt.format_decimal string (12
+    significant digits), or None in a column for a non-real or undefined
+    sample -- "a non-real value is null in the table" (PRODUCT.md F2).
+
+    Raises GraphError for:
+    - a missing/non-dict "functions", or a key in it other than "f1".."f4"
+      (SERIES_COLORS' own keys) -- the exact same check plot() runs (plan
+      step P10's planner notes: "Reuse P10's ... f1-f4 validation").
+    - a function's expression not being a string, the same as plot()'s own
+      per-slot string check.
+    - a missing/non-numeric/non-finite "start" or "step" (_finite_number).
+    - "step" equal to zero -- "step 0 ... returns 400" (PRODUCT.md F2):
+      a zero step would otherwise repeat "start" for every row, never
+      advancing the table at all.
+    - a missing/non-int (or bool) "rows", or one outside
+      [MIN_ROWS, MAX_ROWS] -- "rows > 1000 returns 400" (PRODUCT.md F2);
+      the same lower bound also rejects 0 and any negative row count.
+
+    graphcalc.calc.CalcError can also escape unchanged, from
+    _parse_function -- see the module docstring. Both exception types are
+    400s, handled by graphcalc.cli, never 500s.
+
+    "x" is `rows` values of "start" + index * "step", for index 0..rows-1
+    -- a plain arithmetic sequence, unlike plot()'s evenly-spaced-between-
+    two-ends "x" -- each rendered with numfmt.format_decimal the same way
+    analyze()'s own "x"/"y" strings are, so {"start":0,"step":0.5,
+    "rows":3} reads "0", "0.5", "1" (the acceptance criterion's own
+    example), not "0.0" or "1.0".
+    """
+    if not isinstance(body, dict):
+        raise GraphError("invalid request body")
+
+    functions = body.get("functions")
+    if not isinstance(functions, dict) or not functions:
+        raise GraphError("missing parameter: functions")
+    for name, expr_text in functions.items():
+        if name not in SERIES_COLORS:
+            raise GraphError(f"unknown function slot: {name!r}")
+        if not isinstance(expr_text, str):
+            raise GraphError(f"function {name} must be a string")
+
+    start = _finite_number(body, "start", "start")
+    step = _finite_number(body, "step", "step")
+    if step == 0:
+        raise GraphError("step must not be zero")
+
+    rows = body.get("rows")
+    if isinstance(rows, bool) or not isinstance(rows, int):
+        raise GraphError("missing parameter: rows")
+    if rows < MIN_ROWS or rows > MAX_ROWS:
+        raise GraphError(f"rows must be between {MIN_ROWS} and {MAX_ROWS}")
+
+    xs = [start + index * step for index in range(rows)]
+
+    columns = {}
+    for name, expr_text in functions.items():
+        parsed = _parse_function(expr_text)
+        values = []
+        for x_value in xs:
+            y_value = _evaluate_at(parsed, x_value)
+            values.append(None if y_value is None else format_decimal(y_value, sig=12))
+        columns[name] = values
+
+    return {
+        "x": [format_decimal(x_value, sig=12) for x_value in xs],
+        "columns": columns,
     }

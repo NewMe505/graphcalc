@@ -87,3 +87,28 @@ def test_p14_index_graph_ids():
     # The Calculator tab's ids and behaviour must stay unchanged.
     for element_id in CALC_IDS:
         assert element_id in parser.tags_by_id
+
+
+def test_p14_appjs_graph_paths():
+    server = _start_server()
+    try:
+        base = f"http://127.0.0.1:{server.server_port}"
+        with urllib.request.urlopen(base + "/static/app.js") as res:
+            assert res.status == 200
+            script = res.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+    for path in (
+        "/api/graph/plot",
+        "/api/graph/window",
+        "/api/graph/analyze",
+        "/api/graph/table",
+    ):
+        assert path in script, path
+
+    assert "graph-canvas" in script
+
+    # The Calculator tab's own wiring must stay unchanged by this step.
+    assert "/api/calc/evaluate" in script

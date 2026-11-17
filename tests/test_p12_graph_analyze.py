@@ -1,8 +1,8 @@
-"""Tests for plan step P12/S1: graphcalc/graph.py's analyze() and
-POST /api/graph/analyze -- the "value" and "zero" operations, plus
-request validation shared by every operation.
+"""Tests for plan step P12/S1 and P12/S2: graphcalc/graph.py's analyze()
+and POST /api/graph/analyze -- the "value", "zero", "minimum" and
+"maximum" operations, plus request validation shared by every operation.
 
-F1 (PRODUCT.md, [failing] before this step): 'value of "x^2+1" at x=3
+F1 (PRODUCT.md, [failing] before P12/S1): 'value of "x^2+1" at x=3
 returns x "3", y "10"; zero of "x^2-4" on [0,5] returns x "2"'.
 test_p12_value_direct/test_p12_value_http and
 test_p12_zero_direct/test_p12_zero_http prove this directly (calling
@@ -20,6 +20,16 @@ A gap at the requested x (e.g. "1/x" at x=0) is covered by
 test_p12_value_domain_gap: "y" is None, "domain_error" is set, but "x"
 is still the formatted input and the status is 200 -- "a gap returns
 domain_error instead of y" (planner notes).
+
+F2 (PRODUCT.md, [failing] before P12/S2): 'minimum of "x^2-2x" on [-5,5]
+returns x "1", y "-1"; maximum of "-x^2+4" on [-3,3] returns x "0", y
+"4"'. test_p12_minimum_direct/test_p12_minimum_http and
+test_p12_maximum_direct/test_p12_maximum_http prove this directly and
+over HTTP, the same two ways F1 is proven above.
+test_p12_extremum_no_finite_value_direct/_http covers the "no finite
+value anywhere on the interval" domain_error case the planner notes call
+out for this step, the same 200-with-domain_error shape "zero"'s own
+no-root case already uses.
 
 Validation -- bad operation, missing f, value without x, zero without
 lower/upper, lower==upper, lower>upper, a non-finite bound, intersection
@@ -175,6 +185,96 @@ def test_p12_value_domain_gap_http(base):
     assert status == 200, body
     assert body["y"] is None, body
     assert isinstance(body["domain_error"], str) and body["domain_error"], body
+
+
+# ---- F2: minimum of "x^2-2x" on [-5,5] ----
+
+
+def test_p12_minimum_direct():
+    result = analyze(
+        {"operation": "minimum", "f": "x^2-2x", "lower": -5, "upper": 5}
+    )
+    assert result == {
+        "operation": "minimum",
+        "x": "1",
+        "y": "-1",
+        "domain_error": None,
+    }, result
+
+
+def test_p12_minimum_http(base):
+    status, body = _post(
+        base,
+        "/api/graph/analyze",
+        {"operation": "minimum", "f": "x^2-2x", "lower": -5, "upper": 5},
+    )
+    assert status == 200, body
+    assert body == {
+        "operation": "minimum",
+        "x": "1",
+        "y": "-1",
+        "domain_error": None,
+    }, body
+
+
+# ---- F2: maximum of "-x^2+4" on [-3,3] ----
+
+
+def test_p12_maximum_direct():
+    result = analyze(
+        {"operation": "maximum", "f": "-x^2+4", "lower": -3, "upper": 3}
+    )
+    assert result == {
+        "operation": "maximum",
+        "x": "0",
+        "y": "4",
+        "domain_error": None,
+    }, result
+
+
+def test_p12_maximum_http(base):
+    status, body = _post(
+        base,
+        "/api/graph/analyze",
+        {"operation": "maximum", "f": "-x^2+4", "lower": -3, "upper": 3},
+    )
+    assert status == 200, body
+    assert body == {
+        "operation": "maximum",
+        "x": "0",
+        "y": "4",
+        "domain_error": None,
+    }, body
+
+
+# ---- minimum/maximum: no finite value anywhere on the interval ----
+
+
+def test_p12_extremum_no_finite_value_direct():
+    result = analyze(
+        {"operation": "minimum", "f": "1/0", "lower": -5, "upper": 5}
+    )
+    assert result == {
+        "operation": "minimum",
+        "x": None,
+        "y": None,
+        "domain_error": "no minimum in interval",
+    }, result
+
+
+def test_p12_extremum_no_finite_value_http(base):
+    status, body = _post(
+        base,
+        "/api/graph/analyze",
+        {"operation": "maximum", "f": "1/0", "lower": -5, "upper": 5},
+    )
+    assert status == 200, body
+    assert body == {
+        "operation": "maximum",
+        "x": None,
+        "y": None,
+        "domain_error": "no maximum in interval",
+    }, body
 
 
 # ---- validation: every way the request can be malformed ----

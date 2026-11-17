@@ -25,14 +25,19 @@ that check itself, in _parse_function, after evaluate() returns: any free
 symbol other than "x" left in the simplified result is a GraphError, never
 silently plotted as if it were zero.
 
-analyze() (plan step P12/S1) reuses the same _parse_function and
-_evaluate_at this module already built for plot() -- "value" substitutes
-x directly; "zero" samples and bisects numerically, then snaps the result
-to an exact sympy value when nsimplify finds one that still solves the
-equation within tolerance. The two exception types propagate out of
-analyze() exactly like they do out of plot(): a GraphError for a bad
-request, or calc.CalcError unchanged from _parse_function. "minimum",
-"maximum" and "intersection" are only validated, not computed, by this
+analyze() (plan step P12/S1, extended by P12/S2) reuses the same
+_parse_function and _evaluate_at this module already built for plot() --
+"value" substitutes x directly; "zero" samples and bisects numerically,
+then snaps the result to an exact sympy value when nsimplify finds one
+that still solves the equation within tolerance. "minimum" and "maximum"
+(P12/S2) instead sample densely for the best (lowest/highest) finite
+value, refine it with golden-section search in the bracket around that
+sample, then snap the refined x (and, independently, y) to an exact
+sympy value the same way, but checked against "no worse than the refined
+value" rather than "solves the equation". The two exception types
+propagate out of analyze() exactly like they do out of plot(): a
+GraphError for a bad request, or calc.CalcError unchanged from
+_parse_function. "intersection" is only validated, not computed, by this
 plan step -- see analyze()'s own docstring.
 """
 
@@ -409,6 +414,34 @@ _ZERO_RESIDUAL_TOLERANCE = 1e-6
 # ceiling, not something every call actually spends in full.
 _BISECTION_ITERATIONS = 100
 
+# "minimum"/"maximum" (plan step P12/S2): the same "sample densely, then
+# refine" shape as "zero" above, but hunting for the best (lowest/highest)
+# finite sample instead of a sign change. Reuses the same scan count as
+# _ZERO_SCAN_INTERVALS -- a fixed-cost scan a single request pays once,
+# not something a client's input can grow.
+_EXTREMUM_SCAN_INTERVALS = 400
+# Golden-section search on the bracket around the best sample. 100
+# iterations on even the widest realistic bracket narrows it far past
+# double-precision resolution; the early-exit below (bracket width under
+# 1e-14) means this count is a safe ceiling, not something every call
+# actually spends in full -- the same shape as _BISECTION_ITERATIONS.
+_GOLDEN_SECTION_ITERATIONS = 100
+# An nsimplify snap of an extremum's x (or, failing that, its bare y) is
+# only accepted when it is no worse than this, compared to the refined
+# numeric value it would replace -- "no worse" rather than "near zero",
+# since an extremum has no equation to re-solve the way a root does (see
+# _snap_root). Matches _ZERO_RESIDUAL_TOLERANCE's own magnitude: both
+# exist to separate "numerical noise in the last few bits" from "nsimplify
+# proposed something that is not actually equivalent".
+_EXTREMUM_SNAP_TOLERANCE = 1e-6
+# "minimum"/"maximum" (plan step P12's planner notes): "If f has no finite
+# values on the interval, return a domain_error constant and null x/y."
+# The operation's own name is substituted in, so the message reads "no
+# minimum in interval" or "no maximum in interval" -- the same shape as
+# DOMAIN_ERROR_NO_ZERO's "no zero in interval", just parameterized since
+# this one constant covers both operations.
+DOMAIN_ERROR_NO_EXTREMUM_TEMPLATE = "no {operation} in interval"
+
 
 def _require_expr(body, key):
     """Return body[key] as a non-empty-type-checked string, or raise
@@ -534,9 +567,186 @@ def _snap_root(parsed, root):
     return snapped
 
 
+def _golden_section_minimize(func, a, b, iterations=_GOLDEN_SECTION_ITERATIONS):
+    """Minimize `func` over [a, b] by golden-section search, returning the
+    minimizing x as a plain float.
+
+    `func` already folds in the sign flip "maximum" needs (see
+    _find_extremum, which is the only caller) and already turns a gap
+    into +inf, so this never has to special-case either -- it only ever
+    sees a plain float in, a plain float out, the contract plain
+    golden-section search assumes. Iterates a fixed number of times
+    (_GOLDEN_SECTION_ITERATIONS, ample for double-precision resolution on
+    any realistic bracket) with an early exit once the bracket itself is
+    narrower than double precision can usefully subdivide -- the same
+    shape as _bisect_root's own loop.
+    """
+    if a > b:
+        a, b = b, a
+    golden_ratio = (math.sqrt(5.0) - 1.0) / 2.0
+    c = b - golden_ratio * (b - a)
+    d = a + golden_ratio * (b - a)
+    f_c = func(c)
+    f_d = func(d)
+    for _ in range(iterations):
+        if b - a < 1e-14:
+            break
+        if f_c < f_d:
+            b, d, f_d = d, c, f_c
+            c = b - golden_ratio * (b - a)
+            f_c = func(c)
+        else:
+            a, c, f_c = c, d, f_d
+            d = a + golden_ratio * (b - a)
+            f_d = func(d)
+    return (a + b) / 2.0
+
+
+def _snap_extremum(parsed, x_value, y_value, is_minimum):
+    """Return (x_display, y_display) for an extremum already refined to
+    `x_value`/`y_value` (plain floats), snapping each to a simpler exact
+    sympy value with nsimplify when the snap is "no worse than" (planner
+    notes) the numeric value it would replace.
+
+    x and y are snapped independently, for two different reasons:
+
+    x's snap is only accepted when f at the snapped x -- recomputed
+    exactly, by substituting the snapped sympy value straight into
+    `parsed` rather than evalf-ing first -- is not worse than `y_value`
+    within _EXTREMUM_SNAP_TOLERANCE: no larger for a minimum, no smaller
+    for a maximum. An extremum has no equation to re-solve the way a root
+    does (_snap_root's own residual-near-zero check); "no worse" is the
+    closest equivalent. A snap that is an actual improvement (closer to
+    the true extremum than the golden-section refinement itself landed)
+    is also accepted, not just an exact tie.
+
+    When x's snap is accepted, y is then recomputed from that exact x --
+    e.g. x=1 substituted into "x**2-2*x" is exactly -1, no further
+    rounding needed -- so y is already exact and is returned as-is,
+    without a separate nsimplify pass.
+
+    When x's snap is not available (nsimplify failed, or it changed the
+    value for the worse), y is instead snapped on its own, as a bare
+    number with nothing to re-evaluate it against but the float itself:
+    accepted only when the snapped value's own float evalf is within
+    _EXTREMUM_SNAP_TOLERANCE of `y_value`.
+
+    Never raises and never returns None for either half of the pair --
+    an unsnapped value falls back to the plain float it was given.
+    """
+    snapped_x = None
+    snapped_y = None
+    try:
+        candidate_x = nsimplify(Float(x_value), rational=False)
+    except Exception:
+        candidate_x = None
+    if candidate_x is not None:
+        try:
+            candidate_y = parsed.subs(_X, candidate_x)
+            candidate_y_float = float(candidate_y.evalf())
+        except Exception:
+            candidate_y_float = None
+        if candidate_y_float is not None and math.isfinite(candidate_y_float):
+            worse = (
+                candidate_y_float > y_value + _EXTREMUM_SNAP_TOLERANCE
+                if is_minimum
+                else candidate_y_float < y_value - _EXTREMUM_SNAP_TOLERANCE
+            )
+            if not worse:
+                snapped_x, snapped_y = candidate_x, candidate_y
+
+    if snapped_x is not None:
+        return snapped_x, snapped_y
+
+    try:
+        candidate_only_y = nsimplify(Float(y_value), rational=False)
+        candidate_only_y_float = float(candidate_only_y.evalf())
+    except Exception:
+        return x_value, y_value
+    if (
+        math.isfinite(candidate_only_y_float)
+        and abs(candidate_only_y_float - y_value) <= _EXTREMUM_SNAP_TOLERANCE
+    ):
+        return x_value, candidate_only_y
+    return x_value, y_value
+
+
+def _find_extremum(parsed, lower, upper, is_minimum):
+    """Return (x_display, y_display) for the minimum (is_minimum=True) or
+    maximum of `parsed` on [lower, upper], or None when `parsed` has no
+    finite value anywhere on the interval (plan step P12/S2's own
+    "domain_error constant and null x/y" case).
+
+    `_EXTREMUM_SCAN_INTERVALS` evenly spaced samples, including both ends
+    (the planner notes' "sample densely ... and include both endpoints"),
+    pick out the best (lowest/highest) finite sample. The bracket handed
+    to golden-section search is the nearest finite sample on each side of
+    that best one -- ordinarily its immediate scan neighbours, but a gap
+    sample (e.g. a pole) on one side is skipped in favour of the next
+    finite sample further out, rather than handing golden-section a bound
+    it cannot evaluate at all.
+
+    Golden-section search (_golden_section_minimize) then refines within
+    that bracket, minimizing `parsed` itself for a minimum or its
+    negation for a maximum, with any gap sampled during the search
+    treated as +inf (i.e. never the best point) rather than aborting the
+    search. If that refinement ever comes back no better than the best
+    scan sample already found -- a gap at the refined point, or numerical
+    noise -- the scan sample is kept instead; refinement can only improve
+    on the scan, never regress it.
+
+    The refined (x, y) pair is finally snapped to an exact value with
+    _snap_extremum before being returned.
+    """
+    step = (upper - lower) / _EXTREMUM_SCAN_INTERVALS
+    xs = [lower + index * step for index in range(_EXTREMUM_SCAN_INTERVALS + 1)]
+    xs[-1] = upper
+    ys = [_evaluate_at(parsed, value) for value in xs]
+
+    best_index = None
+    for index, y_value in enumerate(ys):
+        if y_value is None:
+            continue
+        if best_index is None:
+            best_index = index
+        elif (y_value < ys[best_index]) if is_minimum else (y_value > ys[best_index]):
+            best_index = index
+
+    if best_index is None:
+        return None
+
+    left = xs[best_index]
+    for index in range(best_index - 1, -1, -1):
+        if ys[index] is not None:
+            left = xs[index]
+            break
+    right = xs[best_index]
+    for index in range(best_index + 1, len(xs)):
+        if ys[index] is not None:
+            right = xs[index]
+            break
+
+    sign = 1.0 if is_minimum else -1.0
+
+    def signed(x_value):
+        y_value = _evaluate_at(parsed, x_value)
+        return math.inf if y_value is None else sign * y_value
+
+    refined_x, refined_y = xs[best_index], ys[best_index]
+    if left != right:
+        candidate_x = _golden_section_minimize(signed, left, right)
+        candidate_y = _evaluate_at(parsed, candidate_x)
+        if candidate_y is not None:
+            better = (candidate_y < refined_y) if is_minimum else (candidate_y > refined_y)
+            if better:
+                refined_x, refined_y = candidate_x, candidate_y
+
+    return _snap_extremum(parsed, refined_x, refined_y, is_minimum)
+
+
 def analyze(body):
     """Build the POST /api/graph/analyze response dict for `body` (plan
-    step P12/S1).
+    steps P12/S1 and P12/S2).
 
     `body` is {"operation": "value"|"zero"|"minimum"|"maximum"|
     "intersection", "f": expr, "g": expr (intersection only), "x" (value
@@ -582,10 +792,21 @@ def analyze(body):
     whatever float residual bisection's own last sample happened to leave,
     which can carry meaningless floating-point noise.
 
-    "minimum", "maximum" and "intersection" are validated above (same
-    "f"/"g"/"lower"/"upper" rules) but not computed by this plan step --
-    a later plan step replaces this GraphError with the actual
-    computation; no acceptance criterion for this plan step reaches it.
+    "minimum" and "maximum" (plan step P12/S2) find the best (lowest/
+    highest) value of "f" on [lower, upper] with _find_extremum: a dense
+    scan refined by golden-section search, snapped to an exact value the
+    same way "zero" does. No finite value anywhere on the interval (e.g.
+    "f" a constant gap such as "1/0", or exactly as undefined as that at
+    every sampled point) is not a GraphError either -- it answers 200
+    with "x" and "y" both None and "domain_error"
+    DOMAIN_ERROR_NO_EXTREMUM_TEMPLATE filled in with the operation's own
+    name ("no minimum in interval" / "no maximum in interval"), the same
+    200-with-domain_error shape as "zero"'s own no-root case.
+
+    "intersection" is validated above (same "f"/"g"/"lower"/"upper"
+    rules) but not computed by this plan step -- a later plan step
+    replaces this GraphError with the actual computation; no acceptance
+    criterion for this plan step reaches it.
     """
     if not isinstance(body, dict):
         raise GraphError("invalid request body")
@@ -639,6 +860,24 @@ def analyze(body):
             "operation": operation,
             "x": format_decimal(x_display, sig=12),
             "y": format_decimal(0, sig=12),
+            "domain_error": None,
+        }
+
+    if operation in ("minimum", "maximum"):
+        parsed_f = _parse_function(f_text)
+        extremum = _find_extremum(parsed_f, lower, upper, operation == "minimum")
+        if extremum is None:
+            return {
+                "operation": operation,
+                "x": None,
+                "y": None,
+                "domain_error": DOMAIN_ERROR_NO_EXTREMUM_TEMPLATE.format(operation=operation),
+            }
+        x_display, y_display = extremum
+        return {
+            "operation": operation,
+            "x": format_decimal(x_display, sig=12),
+            "y": format_decimal(y_display, sig=12),
             "domain_error": None,
         }
 

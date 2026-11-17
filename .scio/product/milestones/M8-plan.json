@@ -1,0 +1,58 @@
+{
+ "number": 8,
+ "title": "Asymptote fix, lists, one-var stats and regression",
+ "branch": "milestone/8",
+ "features": [
+  {
+   "id": "P34",
+   "tier": "T1",
+   "notes": "Break the curve where consecutive samples jump across a vertical asymptote: sign change with huge magnitude, or the y-range exceeding the window by far. Do the detection server-side in plot (null at the break), or client-side in the canvas draw loop, or both. A steep continuous curve such as 10*x must stay whole. f1 colour stays #1f77b4. Keep the P10 plot contract intact.",
+   "depends_on": [],
+   "files": [
+    "graphcalc/graph.py",
+    "graphcalc/static/app.js",
+    "tests/test_graph_asymptote.py"
+   ]
+  },
+  {
+   "id": "P15",
+   "tier": "T1",
+   "notes": "Add /api/lists CRUD routes. Persist lists in the P9 state store (atomic write-through, reset empties them). Lists must be usable in the evaluator, where 2*L1+1 gives exact \"[3, 5, 7]\". Respect the P23/P27 grammar restrictions and the P26 rule that stored data never breaks later evaluations. Validate each value with the evaluator, so \"abc+\" gives 400.",
+   "depends_on": [],
+   "files": [
+    "graphcalc/lists.py",
+    "graphcalc/state.py",
+    "graphcalc/server.py",
+    "graphcalc/evaluator.py",
+    "tests/test_lists.py"
+   ]
+  },
+  {
+   "id": "P16",
+   "tier": "T1",
+   "notes": "Read the list from the P15 store. Use the TI quartile method (median of the lower and upper halves, leaving out the median when n is odd). Keep exact values with sympy and give decimals with 12 significant digits using the existing formatter. An empty, missing or undefined list gives 400.",
+   "depends_on": [
+    "P15"
+   ],
+   "files": [
+    "graphcalc/stats.py",
+    "graphcalc/server.py",
+    "tests/test_stats_onevar.py"
+   ]
+  },
+  {
+   "id": "P17",
+   "tier": "T1",
+   "notes": "Use a least-squares fit for linear and quadratic models. Coefficients and r2 are 12-significant-digit decimal strings with clean zeros (\"0\", not \"-0\" or \"1e-16\"). The curve has 50 points across the data x-range. Mismatched or bad input gives 400.",
+   "depends_on": [
+    "P15",
+    "P16"
+   ],
+   "files": [
+    "graphcalc/stats.py",
+    "graphcalc/server.py",
+    "tests/test_stats_regression.py"
+   ]
+  }
+ ]
+}

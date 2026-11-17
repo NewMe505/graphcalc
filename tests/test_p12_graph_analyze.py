@@ -1,6 +1,7 @@
-"""Tests for plan step P12/S1 and P12/S2: graphcalc/graph.py's analyze()
-and POST /api/graph/analyze -- the "value", "zero", "minimum" and
-"maximum" operations, plus request validation shared by every operation.
+"""Tests for plan steps P12/S1, P12/S2 and P12/S3: graphcalc/graph.py's
+analyze() and POST /api/graph/analyze -- the "value", "zero", "minimum",
+"maximum" and "intersection" operations, plus request validation shared
+by every operation.
 
 F1 (PRODUCT.md, [failing] before P12/S1): 'value of "x^2+1" at x=3
 returns x "3", y "10"; zero of "x^2-4" on [0,5] returns x "2"'.
@@ -30,6 +31,17 @@ test_p12_extremum_no_finite_value_direct/_http covers the "no finite
 value anywhere on the interval" domain_error case the planner notes call
 out for this step, the same 200-with-domain_error shape "zero"'s own
 no-root case already uses.
+
+F3 (PRODUCT.md, [failing] before P12/S3): 'intersection of "x" and "x^2"
+on [0.5,2] returns x "1", y "1"; zero of "x^2+1" on [-5,5] returns 200
+with x null, y null and domain_error "no zero in interval"'.
+test_p12_intersection_direct/test_p12_intersection_http prove the first
+half; the second half is the same test_p12_zero_none_direct/_http
+already proving F1's own third example above -- F3 does not add a new
+case for it, since "intersection"'s own zero-finder (P12/S3's "run the
+S1 zero-finder on h = f - g") is the same one "zero" already uses.
+"intersection without g gives 400" is the "intersection_missing_g" case
+already parametrized into test_p12_bad_request_400 below.
 
 Validation -- bad operation, missing f, value without x, zero without
 lower/upper, lower==upper, lower>upper, a non-finite bound, intersection
@@ -274,6 +286,72 @@ def test_p12_extremum_no_finite_value_http(base):
         "x": None,
         "y": None,
         "domain_error": "no maximum in interval",
+    }, body
+
+
+# ---- F3: intersection of "x" and "x^2" on [0.5,2] ----
+
+
+def test_p12_intersection_direct():
+    result = analyze(
+        {"operation": "intersection", "f": "x", "g": "x^2", "lower": 0.5, "upper": 2}
+    )
+    assert result == {
+        "operation": "intersection",
+        "x": "1",
+        "y": "1",
+        "domain_error": None,
+    }, result
+
+
+def test_p12_intersection_http(base):
+    status, body = _post(
+        base,
+        "/api/graph/analyze",
+        {"operation": "intersection", "f": "x", "g": "x^2", "lower": 0.5, "upper": 2},
+    )
+    assert status == 200, body
+    assert body == {
+        "operation": "intersection",
+        "x": "1",
+        "y": "1",
+        "domain_error": None,
+    }, body
+
+
+# ---- intersection: no intersection in the interval ----
+
+
+def test_p12_intersection_none_direct():
+    result = analyze(
+        {"operation": "intersection", "f": "x^2+1", "g": "0", "lower": -5, "upper": 5}
+    )
+    assert result == {
+        "operation": "intersection",
+        "x": None,
+        "y": None,
+        "domain_error": "no intersection in interval",
+    }, result
+
+
+def test_p12_intersection_none_http(base):
+    status, body = _post(
+        base,
+        "/api/graph/analyze",
+        {
+            "operation": "intersection",
+            "f": "x^2+1",
+            "g": "0",
+            "lower": -5,
+            "upper": 5,
+        },
+    )
+    assert status == 200, body
+    assert body == {
+        "operation": "intersection",
+        "x": None,
+        "y": None,
+        "domain_error": "no intersection in interval",
     }, body
 
 

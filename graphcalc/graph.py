@@ -37,8 +37,9 @@ sympy value the same way, but checked against "no worse than the refined
 value" rather than "solves the equation". The two exception types
 propagate out of analyze() exactly like they do out of plot(): a
 GraphError for a bad request, or calc.CalcError unchanged from
-_parse_function. "intersection" is only validated, not computed, by this
-plan step -- see analyze()'s own docstring.
+_parse_function. "intersection" (P12/S3) parses both "f" and "g", then
+reuses the exact same zero-finder on h = f - g; see analyze()'s own
+docstring.
 """
 
 import math
@@ -157,6 +158,48 @@ def _evaluate_at(parsed, x_value):
         return float(value)
     except (TypeError, ValueError, OverflowError):
         return None
+
+
+def _evaluate_exact_at(parsed, x_value):
+    """Return parsed(x_value) still as a sympy expression (not narrowed to
+    a plain float), or None for a gap -- used only by analyze()'s
+    "intersection" operation (plan step P12/S3).
+
+    The gap rules are the same ones _evaluate_at applies (a non-real
+    result, an infinite zoo/oo/-oo, or nan), checked the same way, via
+    evalf(). The difference is what gets returned on success: `x_value`
+    here can itself already be an exact sympy value (e.g. the Integer 1
+    _snap_root snapped an intersection's x to), and substituting *that*
+    straight into `parsed` -- the way _snap_extremum's own "candidate_y =
+    parsed.subs(_X, candidate_x)" already does for minimum/maximum --
+    keeps y exact too (e.g. f(1) substituted into "x**2" is exactly the
+    Integer 1, not a rounded double). _evaluate_at cannot be reused for
+    this: it always wraps its x_value in a plain-precision Float first
+    (so "1/x" at x=0 reads as sympy's symbolic zoo rather than a Python
+    ZeroDivisionError), which loses that exactness, and raises outright
+    for an exact irrational like sqrt(2) (sympy's Float() constructor
+    only accepts an already-numeric argument, not a general expression).
+    format_decimal rounds an exact sympy value to its 12 significant
+    digits exactly as well as it rounds a plain float, so there is no
+    reason to narrow to double precision before formatting when the exact
+    value is already in hand.
+    """
+    if parsed is None:
+        return None
+    try:
+        candidate = parsed.subs(_X, x_value)
+        value = candidate.evalf()
+    except Exception:
+        return None
+    if value in (zoo, oo, -oo) or value == nan:
+        return None
+    if not getattr(value, "is_real", False):
+        return None
+    try:
+        float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return candidate
 
 
 def _finite_number(container, key, label):
@@ -441,6 +484,16 @@ _EXTREMUM_SNAP_TOLERANCE = 1e-6
 # DOMAIN_ERROR_NO_ZERO's "no zero in interval", just parameterized since
 # this one constant covers both operations.
 DOMAIN_ERROR_NO_EXTREMUM_TEMPLATE = "no {operation} in interval"
+
+# "intersection" (plan step P12/S3): "run the S1 zero-finder on h = f - g
+# ... when no root exists, return domain_error with x and y null" (planner
+# notes). A distinct constant from DOMAIN_ERROR_NO_ZERO, even though "zero"
+# of h would read identically, because this is "intersection"'s own
+# domain_error for "intersection"'s own request -- a client that posted
+# {"operation": "intersection", ...} should see a message that says so,
+# not "no zero in interval" for an "f" and "g" it never asked to be
+# compared against 0.
+DOMAIN_ERROR_NO_INTERSECTION = "no intersection in interval"
 
 
 def _require_expr(body, key):
@@ -803,10 +856,19 @@ def analyze(body):
     name ("no minimum in interval" / "no maximum in interval"), the same
     200-with-domain_error shape as "zero"'s own no-root case.
 
-    "intersection" is validated above (same "f"/"g"/"lower"/"upper"
-    rules) but not computed by this plan step -- a later plan step
-    replaces this GraphError with the actual computation; no acceptance
-    criterion for this plan step reaches it.
+    "intersection" (plan step P12/S3) parses "g" the same way "f" is
+    parsed, then runs the exact same _scan_for_root/_snap_root pair
+    "zero" uses above, but on h = f - g instead of on f directly -- an
+    intersection of f and g is exactly a zero of their difference. No
+    root in the interval is, the same as "zero"'s own no-root case, a 200
+    with "x" and "y" both None and "domain_error" set, here to
+    DOMAIN_ERROR_NO_INTERSECTION ("no intersection in interval") rather
+    than DOMAIN_ERROR_NO_ZERO, since this is "intersection"'s own request,
+    not "zero"'s. Unlike "zero" (whose root's own y is always exactly 0,
+    by construction), "y" here is f's (or, failing that, g's) actual
+    value at the found x, recovered with _evaluate_exact_at so that an
+    exact snapped x (e.g. the Integer 1) yields an exact y too, not one
+    narrowed to double precision first.
     """
     if not isinstance(body, dict):
         raise GraphError("invalid request body")
@@ -816,8 +878,7 @@ def analyze(body):
         raise GraphError(f"unknown operation: {operation!r}")
 
     f_text = _require_expr(body, "f")
-    if operation == "intersection":
-        _require_expr(body, "g")
+    g_text = _require_expr(body, "g") if operation == "intersection" else None
 
     if operation == "value":
         x_value = _finite_number(body, "x", "x")
@@ -881,4 +942,33 @@ def analyze(body):
             "domain_error": None,
         }
 
-    raise GraphError(f"operation not implemented yet: {operation!r}")
+    # operation == "intersection" (plan step P12/S3): see docstring above.
+    parsed_f = _parse_function(f_text)
+    parsed_g = _parse_function(g_text)
+    h = parsed_f - parsed_g if parsed_f is not None and parsed_g is not None else None
+    root = _scan_for_root(h, lower, upper)
+    if root is None:
+        return {
+            "operation": operation,
+            "x": None,
+            "y": None,
+            "domain_error": DOMAIN_ERROR_NO_INTERSECTION,
+        }
+    snapped = _snap_root(h, root)
+    x_display = snapped if snapped is not None else root
+    y_display = _evaluate_exact_at(parsed_f, x_display)
+    if y_display is None:
+        y_display = _evaluate_exact_at(parsed_g, x_display)
+    if y_display is None:
+        return {
+            "operation": operation,
+            "x": format_decimal(x_display, sig=12),
+            "y": None,
+            "domain_error": DOMAIN_ERROR_NO_VALUE,
+        }
+    return {
+        "operation": operation,
+        "x": format_decimal(x_display, sig=12),
+        "y": format_decimal(y_display, sig=12),
+        "domain_error": None,
+    }

@@ -400,6 +400,23 @@
   distinct x values for the model (fewer than 2 for `"linear"`, fewer than
   3 for `"quadratic"`), or every `y` value equal (`r2` undefined) each
   answer 400, never a 500. Added `tests/test_p17_regression.py`.
+- `POST /api/cas/simplify`, `/api/cas/expand` and `/api/cas/factor` (P19):
+  stateless CAS algebra over sympy. Each takes body `{"expr": str}` and
+  answers 200 with `{"result": str}`: `/simplify` runs `sympy.simplify()`
+  (`"(x^2-1)/(x-1)"` -> `"x + 1"`), `/expand` runs `sympy.expand()`
+  (`"(x+1)^2"` -> `"x^2 + 2*x + 1"`), and `/factor` runs `sympy.factor()`
+  (`"x^2-5x+6"` -> `"(x - 3)*(x - 2)"`). `expr` is parsed with the same
+  restricted grammar `POST /api/calc/evaluate` uses (`graphcalc.grammar.
+  check_grammar`/`normalize_numbers`, the same `rad`-mode name whitelist
+  for calls, implicit multiplication), so an undefined name such as `x`
+  becomes a free symbol and every result renders with `^` for a power,
+  never sympy's own `**`. Unlike `/api/calc/evaluate`, these routes read
+  no stored ans/variables/functions/lists and have no `rad`/`deg` mode --
+  a CAS request carries no state at all. A missing/empty/non-string
+  `"expr"`, a non-object body, invalid JSON, or anything the parser itself
+  rejects (bad grammar, an unknown function call, a dangling operator such
+  as `"x+"`) answers 400 with a JSON `{"error": ...}`, never a 500. Added
+  `graphcalc/cas.py` and `tests/test_p19_cas.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

@@ -435,6 +435,40 @@ curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
 # {"error": "x and y must have the same length"}
 ```
 
+`POST /api/cas/simplify`, `POST /api/cas/expand` and `POST /api/cas/factor`
+each take body `{"expr": str}` and answer 200 with `{"result": str}`:
+`/simplify` runs sympy's `simplify()`, `/expand` runs `expand()`, and
+`/factor` runs `factor()`. `expr` is parsed with the same restricted
+grammar `POST /api/calc/evaluate` uses (no Python comparison/bitwise/
+shift/floor-division operators, the same numeric-literal and call-name
+rules), so an undefined name such as `x` becomes a free symbol the same
+way it would in a calculator expression, and every result is rendered
+with `^` for a power, never sympy's own `**`. Unlike `/api/calc/evaluate`,
+these three routes are stateless: no stored ans, variables, functions or
+lists are read, and there is no `rad`/`deg` mode. A missing, empty or
+non-string `"expr"`, a non-object body, invalid JSON, or an `expr` the
+parser itself rejects (bad grammar, an unknown function call, a dangling
+operator such as `"x+"`) each answer 400 with `{"error": ...}` -- never a
+500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/cas/simplify \
+  -H "Content-Type: application/json" -d '{"expr": "(x^2-1)/(x-1)"}'
+# {"result": "x + 1"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/expand \
+  -H "Content-Type: application/json" -d '{"expr": "(x+1)^2"}'
+# {"result": "x^2 + 2*x + 1"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/factor \
+  -H "Content-Type: application/json" -d '{"expr": "x^2-5x+6"}'
+# {"result": "(x - 3)*(x - 2)"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/factor \
+  -H "Content-Type: application/json" -d '{"expr": "x+"}'
+# {"error": "invalid expression: x+"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and

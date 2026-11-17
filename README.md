@@ -323,6 +323,43 @@ curl -s -X POST http://127.0.0.1:8000/api/graph/window \
 # {"error": "unknown action: 'sideways'"}
 ```
 
+`POST /api/graph/table` builds a value table for up to four functions, also
+stateless. Body `{"functions": {"f1".."f4": expr}, "start", "step", "rows"}`
+-- each `expr` goes through the same grammar, whitelist and freeze guard as
+`/api/graph/plot`, with `"x"` the sole free variable. Answers 200 with
+`{"x": [str, ...], "columns": {name: [str | null, ...]}}`: `"x"` is `rows`
+values of `start + index * step` for `index` 0..`rows - 1` -- a plain
+arithmetic sequence starting at `start`, unlike `/api/graph/plot`'s evenly-
+spaced-between-two-ends `"x"` -- and both `"x"` and every column entry are
+12-significant-digit decimal strings, e.g. `{"start": 0, "step": 0.5,
+"rows": 3}` gives `x ["0", "0.5", "1"]`. A non-real or undefined sample
+(`"sqrt(x)"` at `x=-1`, `"1/x"` at `x=0`) is `null` in that column -- the
+same gap rule `/api/graph/plot` already applies -- never a 400 for one bad
+sample; the request as a whole still answers 200. A 400
+(`{"error": <message>}`) covers the same `functions` validation
+`/api/graph/plot` uses (a slot outside `f1`-`f4`, a missing/empty/non-dict
+`functions`, a non-string expression), a missing/non-numeric/non-finite
+`start` or `step`, `step` equal to `0`, and a missing/non-int (a bool does
+not count) `rows` outside `[1, 1000]`. A parse error or an unknown function
+call in an `expr` is a 400 too, never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/graph/table \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "x^2"}, "start": 0, "step": 0.5, "rows": 3}'
+# {"x": ["0", "0.5", "1"], "columns": {"f1": ["0", "0.25", "1"]}}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/table \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "sqrt(x)"}, "start": -1, "step": 1, "rows": 3}'
+# {"x": ["-1", "0", "1"], "columns": {"f1": [null, "0", "1"]}}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/table \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "x"}, "start": 0, "step": 0, "rows": 3}'
+# {"error": "step must not be zero"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and

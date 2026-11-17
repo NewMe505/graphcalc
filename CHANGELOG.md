@@ -272,6 +272,31 @@
   `graphcalc.graph.analyze` (plus `GraphError`, `DOMAIN_ERROR_NO_ZERO`,
   `DOMAIN_ERROR_NO_VALUE`, `ANALYZE_OPERATIONS`), `graphcalc.cli.
   _handle_graph_analyze`, and `tests/test_p12_graph_analyze.py`.
+- `POST /api/graph/table` (P13/S1): a value table for up to four functions,
+  stateless like `/api/graph/plot`, `/api/graph/window` and
+  `/api/graph/analyze`. Body `{"functions": {"f1".."f4": expr}, "start",
+  "step", "rows"}` answers 200 `{"x": [str, ...], "columns": {name: [str |
+  null, ...]}}`: `"x"` is `rows` values of `start + index * step` -- a plain
+  arithmetic sequence, not `/api/graph/plot`'s evenly-spaced-between-two-ends
+  `"x"` -- and both `"x"` and every column entry are
+  `graphcalc.numfmt.format_decimal` strings (12 significant digits), e.g.
+  `{"functions": {"f1": "x^2"}, "start": 0, "step": 0.5, "rows": 3}` ->
+  `x ["0", "0.5", "1"]`, `columns.f1 ["0", "0.25", "1"]`. A non-real or
+  undefined sample (`"sqrt(x)"` at `x=-1`, `"1/x"` at `x=0`) is `null` in
+  that column -- the same gap rule `/api/graph/plot`/`/api/graph/analyze`
+  already apply -- never a 400 for one bad sample; the request as a whole
+  still answers 200. Each function is parsed with the same
+  `_parse_function`/`_evaluate_at` pair `/api/graph/plot` samples with, so
+  `graphcalc.calc.CalcError` (bad syntax, an unknown function call, an
+  oversized power) is a 400 here too, not just the new
+  `graphcalc.graph.GraphError`. 400 also covers: `/api/graph/plot`'s own
+  `functions` validation (a slot outside `f1`-`f4`, a missing/empty/non-dict
+  `functions`, a non-string expression), a missing/non-numeric/non-finite
+  `start` or `step`, `step` equal to `0` (would otherwise repeat `start`
+  forever without advancing the table), and a missing/non-int (a bool does
+  not count) `rows` outside `[1, 1000]` (`MIN_ROWS`/`MAX_ROWS`). Never a 500.
+  Added `graphcalc.graph.table` (plus `MIN_ROWS`/`MAX_ROWS`),
+  `graphcalc.cli._handle_graph_table`, and `tests/test_p13_graph_table.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

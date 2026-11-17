@@ -8,6 +8,57 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P13/S1 (2026-11-17): `POST /api/graph/table`. `graphcalc/graph.py`,
+  `graphcalc/cli.py`, `tests/test_p13_graph_table.py`.
+  - `table()` deliberately reuses plot()'s own "functions" validation
+    (missing/non-dict `functions`, an unknown slot outside `f1`-`f4`, a
+    non-string expression) and the same `_parse_function`/`_evaluate_at`
+    pair plot() samples with, per the planner notes ("Reuse P10's sampling
+    and f1-f4 validation") -- no new validation helper, no new parsing
+    path. The only genuinely new logic is the `"x"` sequence itself: a
+    plain arithmetic progression (`start + index * step`), not plot()'s
+    evenly-spaced-between-two-ends window, and rendering every value
+    (`"x"` and each column entry) through `numfmt.format_decimal` as a
+    string instead of plot()'s plain floats -- a value table reads like
+    `/api/graph/analyze`'s `"x"`/`"y"` strings, not a plot series.
+  - New `MIN_ROWS = 1`/`MAX_ROWS = 1000` (planner notes: "rows < 1 or
+    rows > 1000 answer 400"), and an explicit `step == 0` check (planner
+    notes: "Step 0 ... answer 400") -- a zero step would otherwise just
+    repeat `start` for every row, never raising on its own since nothing
+    about the arithmetic itself divides by `step`.
+  - `graphcalc/cli.py::_handle_graph_table` copies
+    `_handle_graph_analyze`'s `(GraphError, CalcError) -> 400` pattern
+    exactly (lazy `from graphcalc import calc, graph` import, same
+    catch-all backstop), wired as a fourth `do_POST` branch
+    (`GRAPH_TABLE_PATH = "/api/graph/table"`), next to `/api/graph/plot`,
+    `/api/graph/window` and `/api/graph/analyze`.
+  - Stateless like the other three graph routes: never reads or writes
+    variables, functions, `ans`, or history, confirmed by the `server`
+    fixture's own docstring in the new test file (built the same way
+    `test_p12_graph_analyze.py`'s fixture is, even though this endpoint
+    never touches either store it wires up).
+  - Added `tests/test_p13_graph_table.py`: the F1 acceptance case itself
+    (direct call and over HTTP), a multiple-function-slots case (each
+    function gets its own column, same `"x"` shared across all of them),
+    F2's non-real-value case (`"sqrt(x)"` at `x=-1` -> `null`, status
+    still 200) plus an infinite-sample case (`"1/x"` at `x=0`, the same
+    gap rule via `_evaluate_at`, not just a non-real one), a parametrized
+    400 sweep over every malformed-request shape (missing/empty
+    `functions`, an unknown slot, a non-string expression, missing/non-
+    finite `start`/`step`, a zero step, a missing/bool/float `rows`, `rows`
+    under `MIN_ROWS` or over `MAX_ROWS`, and an unsafe expression), and a
+    bounds check that `MIN_ROWS`/`MAX_ROWS` themselves are accepted, not
+    off-by-one rejected. 23 passed in the new file; full suite 363 passed,
+    4 skipped. No plan drift, no design question: additive, one new
+    function in `graph.py`, one new handler in `cli.py`, reusing existing
+    validation and formatting helpers throughout.
+  - Doc gap noticed, not fixed here (out of this step's scope): README.md's
+    "Use" section documents `/api/graph/plot` and `/api/graph/window` with
+    curl examples but never gained a section for `/api/graph/analyze`
+    (P12) -- `/api/graph/table`'s own new README section was added right
+    after `/api/graph/window`'s, so the "Use" section now jumps straight
+    from window to table without ever mentioning analyze. Worth a follow-up
+    pass to backfill P12's README section.
 - P12/S1 (2026-11-17): `POST /api/graph/analyze`, "value" and "zero" only.
   `graphcalc/graph.py`, `graphcalc/cli.py`, `tests/test_p12_graph_analyze.py`.
   - `graph.py` already had `analyze()`, both ops, and all the validation

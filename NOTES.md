@@ -10,6 +10,42 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P20/S4 (2026-11-17): `_parse_bound` (`graphcalc/cas.py`), used by both
+  `integral()`'s `"lower"`/`"upper"` and `limit()`'s `"point"`, now also
+  accepts an expression string, not just a JSON number. `"oo"`, `"+oo"`,
+  `"-oo"` and the spelled-out `"infinity"`/`"+infinity"`/`"-infinity"`
+  (stripped of surrounding whitespace) are mapped straight to sympy's own
+  `oo`/`-oo` through a small lookup table, `_INFINITY_TOKENS`, checked
+  *before* the string is ever handed to this module's shared `_parse`:
+  `"oo"` is not one of `_rad_names()`'s whitelisted names, so `_parse("oo")`
+  would otherwise resolve it via `parse_expr`'s own `auto_symbol` fallback
+  into a free `Symbol('oo')`, not real infinity. Any other string -- `"pi"`,
+  `"2*pi"`, `"e"`, `"y"`, a malformed string such as `"x+"` -- is run
+  through `_parse` itself (the exact same grammar/whitelist `"expr"` goes
+  through, so the P20/S1 power-size hang guard inside `_parse` covers a
+  bound string too), and the parsed result must come back with
+  `free_symbols` empty: `"pi"`/`"2*pi"`/`"e"` resolve to a constant with no
+  free symbols and pass, `"y"` parses fine as a bare `Symbol` but is
+  rejected as not-a-number, and `"x+"` never parses at all (`GrammarError`/
+  `parse_expr` failure, both already turned into `CalcError` by `_parse`).
+  An empty-string bound raises `CalcError` too, for free, since `_parse`
+  itself already rejects an empty/whitespace-only string before
+  `free_symbols` is ever checked -- no separate empty-string check was
+  needed here. Two-sided-limit policy (unchanged by this step, restated
+  here since the planner note asked for it): `limit()`'s `"dir"` defaults
+  to `None`, which means sympy's own `dir="+-"` two-sided limit, not a
+  one-sided one picked arbitrarily; if sympy's two one-sided limits
+  disagree (`sign(x)` at `0`) or both agree on `zoo`/`nan` instead of a
+  real value (`"1/x"` at `0`), `limit()` raises `CalcError("limit does not
+  exist: ...")` rather than ever answering 200 with an undefined result.
+  Added `test_p20_symbolic_bounds_*` to `tests/test_p20_cas_calculus.py`:
+  `integral("sin(x)", "x", 0, "pi")` -> `"2"`, `limit("1/x", "x", "oo")`
+  and `limit("1/x", "x", "-oo")` -> `"0"` (both through the real HTTP route
+  and directly against `graphcalc.cas`), plus a `"y"` bound and a `"x+"`
+  bound each giving 400. P20/S1-S3 (derivative, integral, limit with
+  JSON-number-only bounds) were already done and passing coming into this
+  step; this step only extended `_parse_bound` and added its own tests --
+  no other file needed to change.
 - P18 (2026-11-17): Lists & Statistics tab UI. `graphcalc/static/index.html`,
   `graphcalc/static/app.js`, `tests/test_p18_lists_ui.py`,
   `tests/test_p18_lists_browser.py`.

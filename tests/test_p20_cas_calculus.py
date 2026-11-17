@@ -71,6 +71,25 @@ test_p20_limit_unit_two_sided_1_over_x_raises_calc_error prove the
 two-sided limit of "1/x" at 0 -- where sympy.limit() hands back its own
 zoo instead of raising -- is also a CalcError/400, not a 200 echoing an
 undefined "zoo" result.
+
+F4 (PRODUCT.md, [failing] before P20/S4): 'integral of "sin(x)" by x with
+lower 0 and upper "pi" returns "2"; limit of "1/x" at point "oo" returns
+"0"'. test_p20_symbolic_bounds_integral_upper_pi and
+test_p20_symbolic_bounds_unit_integral_upper_pi prove the first half
+through the real POST /api/cas/integral route and directly against
+graphcalc.cas.integral(); test_p20_symbolic_bounds_limit_point_oo and
+test_p20_symbolic_bounds_unit_limit_point_oo prove the second half the
+same two ways. test_p20_symbolic_bounds_limit_point_negative_oo and
+test_p20_symbolic_bounds_unit_limit_point_negative_oo prove the "-oo"
+spelling also works (the acceptance checklist only names "oo", but this
+plan step's own notes ask for "-oo" too, since _parse_bound maps both).
+test_p20_symbolic_bounds_400_free_symbol and
+test_p20_symbolic_bounds_unit_400_free_symbol_raises_calc_error prove a
+bound that parses to a free symbol ("y") is a JSON 400, never treated as
+a number. test_p20_symbolic_bounds_400_garbage_string and
+test_p20_symbolic_bounds_unit_400_garbage_string_raises_calc_error prove
+a bound that is not valid grammar at all ("x+") is also a JSON 400, not a
+500.
 """
 
 import pytest
@@ -306,3 +325,69 @@ def test_p20_limit_400_two_sided_1_over_x(base):
 def test_p20_limit_unit_two_sided_1_over_x_raises_calc_error():
     with pytest.raises(CalcError):
         cas.limit("1/x", "x", 0)
+
+
+# ---- F4: integral of "sin(x)" by x, lower 0, upper "pi" returns "2";
+#          limit of "1/x" at point "oo" returns "0" ----
+
+
+def test_p20_symbolic_bounds_integral_upper_pi(base):
+    status, body = _post(
+        base, "/api/cas/integral", {"expr": "sin(x)", "var": "x", "lower": 0, "upper": "pi"}
+    )
+    assert status == 200, body
+    assert body == {"result": "2"}, body
+
+
+def test_p20_symbolic_bounds_unit_integral_upper_pi():
+    assert cas.integral("sin(x)", "x", 0, "pi") == "2"
+
+
+def test_p20_symbolic_bounds_limit_point_oo(base):
+    status, body = _post(base, "/api/cas/limit", {"expr": "1/x", "var": "x", "point": "oo"})
+    assert status == 200, body
+    assert body == {"result": "0"}, body
+
+
+def test_p20_symbolic_bounds_unit_limit_point_oo():
+    assert cas.limit("1/x", "x", "oo") == "0"
+
+
+def test_p20_symbolic_bounds_limit_point_negative_oo(base):
+    status, body = _post(base, "/api/cas/limit", {"expr": "1/x", "var": "x", "point": "-oo"})
+    assert status == 200, body
+    assert body == {"result": "0"}, body
+
+
+def test_p20_symbolic_bounds_unit_limit_point_negative_oo():
+    assert cas.limit("1/x", "x", "-oo") == "0"
+
+
+# ---- a bound that parses to a free symbol ("y") is a JSON 400 ----
+
+
+def test_p20_symbolic_bounds_400_free_symbol(base):
+    status, body = _post(
+        base, "/api/cas/integral", {"expr": "x^2", "var": "x", "lower": 0, "upper": "y"}
+    )
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_symbolic_bounds_unit_400_free_symbol_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.integral("x^2", "x", 0, "y")
+
+
+# ---- a bound that is not valid grammar at all is a JSON 400, not a 500 ----
+
+
+def test_p20_symbolic_bounds_400_garbage_string(base):
+    status, body = _post(base, "/api/cas/limit", {"expr": "1/x", "var": "x", "point": "x+"})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_symbolic_bounds_unit_400_garbage_string_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.limit("1/x", "x", "x+")

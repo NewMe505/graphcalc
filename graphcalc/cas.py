@@ -6,6 +6,9 @@ expand(expr) next to it in this same module; plan step P19/S3 added
 factor(expr) to complete that set. Plan step P20/S1 adds derivative(expr,
 var) next to them. Plan step P20/S2 adds integral(expr, var, lower=None,
 upper=None). Plan step P20/S3 adds limit(expr, var, point, dir=None).
+Plan step P20/S4 teaches _parse_bound (used by both integral() and
+limit()) to also accept an expression string such as "pi" or "oo" for
+"lower"/"upper"/"point", not just a bare JSON number.
 simplify(), expand(), factor(), derivative(), integral() and limit() are
 the only things graphcalc/cli.py calls from here; neither they nor _parse
 ever touches the network.
@@ -67,19 +70,37 @@ CalcError, never any other exception, so graphcalc/cli.py's handlers can
 catch exactly that one type and turn it into the usual JSON 400, the same
 "never a 500" rule every other math-performing route already follows.
 
-_parse_bound(value, name) (plan step P20/S2) turns a POST body's "lower"/
-"upper" value into an exact sympy object for integral()'s definite-integral
-form. In this step it only accepts a JSON number: bool is rejected even
-though Python's bool is an int subclass (True/False are not valid bounds),
-and a float NaN or infinity is rejected the same way a non-finite "start"/
-"step" is rejected elsewhere in this codebase (graphcalc.graph.table).
-A plain int becomes an exact sympy.Integer; a float is handed to sympy.
-nsimplify(..., rational=True) so e.g. 0.5 comes back as the exact Rational
-1/2 instead of the ugly binary fraction float(0.5) actually is -- "the
-results stay exact" the same way every other CAS operation's result is
-exact. Any other type (str, list, dict, None, ...) raises CalcError; a
-later plan step teaches this helper to also accept an expression string
-such as "pi" or "oo" for /integral's bounds and /limit's point.
+_parse_bound(value, name) (plan steps P20/S2, P20/S4) turns a POST body's
+"lower"/"upper"/"point" value into an exact sympy object for integral()'s
+definite-integral form and limit()'s own point. A JSON number: bool is
+rejected even though Python's bool is an int subclass (True/False are not
+valid bounds), and a float NaN or infinity is rejected the same way a
+non-finite "start"/"step" is rejected elsewhere in this codebase
+(graphcalc.graph.table). A plain int becomes an exact sympy.Integer; a
+float is handed to sympy.nsimplify(..., rational=True) so e.g. 0.5 comes
+back as the exact Rational 1/2 instead of the ugly binary fraction
+float(0.5) actually is -- "the results stay exact" the same way every
+other CAS operation's result is exact.
+
+Plan step P20/S4 adds a string `value`: an expression such as "pi", "oo"
+or "-oo". "oo"/"+oo"/"-oo" and the spelled-out "infinity"/"+infinity"/
+"-infinity" (stripped of surrounding whitespace first) are mapped
+straight to sympy.oo/-oo via a small lookup table, _INFINITY_TOKENS,
+rather than being run through _parse: "oo" is not one of _rad_names()'s
+whitelisted names, so _parse("oo") would otherwise turn it into a free
+Symbol('oo') via parse_expr's own auto_symbol fallback, not sympy's
+actual infinity. Any other string is run through this module's own
+_parse -- the same grammar/whitelist every CAS operation's own "expr"
+goes through, so "pi" and "e" resolve via _rad_names() to sympy.pi/E and
+"2*pi" to the product, and the P20/S1 power-size guard inside _parse
+still applies to a bound string too. The parsed result must then have no
+free symbols -- "y" parses fine as a bare Symbol but is not a number, so
+it is rejected the same as any other invalid bound -- which is also why
+a bound given as the empty string raises CalcError: _parse itself
+rejects an empty/whitespace-only string before free_symbols is ever
+checked. Any other type (list, dict, None, ...) still raises CalcError
+naming `name` (e.g. "lower", "upper", "point") so the caller's error
+message says which parameter was bad.
 
 limit(expr, var, point, dir=None) (plan step P20/S3) parses `point` with
 _parse_bound (the same JSON-number-only rule described above) and runs
@@ -98,7 +119,7 @@ e.g. the one-sided limit of "1/x" at 0 with dir="+" -- and renders as
 
 import math
 
-from sympy import Integer, Symbol, nan, zoo
+from sympy import Integer, Symbol, nan, oo, zoo
 from sympy import Integral as _sympy_Integral
 from sympy import diff as _sympy_diff
 from sympy import expand as _sympy_expand
@@ -215,22 +236,50 @@ def derivative(expr: str, var: str) -> str:
         raise CalcError(f"invalid expression: {expr}") from exc
 
 
+# Plan step P20/S4: exact spellings mapped straight to sympy infinity,
+# checked (after stripping surrounding whitespace) before any string bound
+# is ever handed to _parse -- see this module's own docstring for why "oo"
+# itself must not fall through to _parse (it is not one of _rad_names()'s
+# whitelisted names, so _parse would otherwise turn it into a free
+# Symbol('oo') instead of sympy's actual infinity).
+_INFINITY_TOKENS = {
+    "oo": oo,
+    "+oo": oo,
+    "-oo": -oo,
+    "infinity": oo,
+    "+infinity": oo,
+    "-infinity": -oo,
+}
+
+
 def _parse_bound(value, name: str):
-    """Turn a POST body's `value` for "lower"/"upper" (or, later, "point")
-    into an exact sympy object, raising CalcError on failure (plan step
-    P20/S2). See this module's own docstring for the full rule; in this
-    step only a JSON int or float is accepted -- bool and non-finite float
-    (NaN, +-inf) are rejected, and any other type raises CalcError naming
-    `name` (e.g. "lower", "upper") so the caller's error message says which
+    """Turn a POST body's `value` for "lower"/"upper"/"point" into an exact
+    sympy object, raising CalcError on failure (plan steps P20/S2, P20/S4).
+    See this module's own docstring for the full rule: a JSON int or float
+    (bool and non-finite float -- NaN, +-inf -- are rejected), or a string
+    expression such as "pi", "2*pi", "e", "oo" or "-oo", parsed through
+    _INFINITY_TOKENS or, failing that, _parse itself, then required to have
+    no free symbols. Any other type raises CalcError naming `name` (e.g.
+    "lower", "upper", "point") so the caller's error message says which
     parameter was bad.
     """
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
+    if isinstance(value, bool):
         raise CalcError(f"invalid {name}: {value!r}")
     if isinstance(value, float):
         if math.isnan(value) or math.isinf(value):
             raise CalcError(f"invalid {name}: {value!r}")
         return nsimplify(value, rational=True)
-    return Integer(value)
+    if isinstance(value, int):
+        return Integer(value)
+    if isinstance(value, str):
+        token = value.strip()
+        if token in _INFINITY_TOKENS:
+            return _INFINITY_TOKENS[token]
+        parsed = _parse(value)
+        if parsed.free_symbols:
+            raise CalcError(f"invalid {name}: {value!r}")
+        return parsed
+    raise CalcError(f"invalid {name}: {value!r}")
 
 
 def integral(expr: str, var: str, lower=None, upper=None) -> str:

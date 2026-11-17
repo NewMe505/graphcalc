@@ -452,6 +452,36 @@
   rejects (bad grammar, an unknown function call, a dangling operator such
   as `"x+"`) answers 400 with a JSON `{"error": ...}`, never a 500. Added
   `graphcalc/cas.py` and `tests/test_p19_cas.py`.
+- `POST /api/cas/derivative`, `/api/cas/integral` and `/api/cas/limit`
+  (P20): the rest of the CAS calculus set, next to P19's algebra routes in
+  `graphcalc/cas.py`. `/derivative` takes `{"expr", "var"}` and runs
+  `sympy.diff()` (`"x*sin(x)"` by `"x"` -> `"x*cos(x) + sin(x)"`).
+  `/integral` takes `{"expr", "var"}` plus optional `"lower"`/`"upper"`:
+  with neither, the indefinite integral (`"x^2"` by `"x"` ->  `"x^3/3"`);
+  with both, the definite one (`0`/`1` -> `"1/3"`); supplying only one of
+  the two is a 400, and an integral sympy cannot find a closed form for
+  answers 400 `"no closed form"` rather than echoing the input back.
+  `/limit` takes `{"expr", "var", "point"}` plus optional `"dir"`: with no
+  `"dir"`, sympy's own two-sided `dir="+-"` (`"sin(x)/x"` at `0` -> `"1"`);
+  `"+"`/`"-"` for a one-sided limit (`"1/x"` at `0` with `"+"` -> `"oo"`);
+  any other `"dir"` (including a non-string) is a 400 before `"expr"` is
+  even parsed. A limit sympy cannot resolve -- it raises (the two one-sided
+  limits disagree) or hands back its own `zoo`/`nan` instead of a value
+  (the two-sided limit of `"1/x"` at `0`) -- is also a 400, never a 200
+  echoing an undefined result. `"var"` must be a plain ASCII identifier
+  string for all three routes. `"lower"`/`"upper"`/`"point"` each accept
+  either a JSON number (bool and non-finite float rejected) or an
+  expression string such as `"pi"` or `"oo"`/`"-oo"` (`"infinity"`/
+  `"-infinity"` also work) -- `"oo"`/`"-oo"` map straight to sympy's own
+  infinity, any other string is parsed with the same grammar/whitelist
+  `"expr"` itself uses and must come back with no free symbols (so `"pi"`
+  and `"2*pi"` work, `"y"` and a malformed string such as `"x+"` are both
+  400s), letting `integral("sin(x)", "x", 0, "pi")` -> `"2"` and
+  `limit("1/x", "x", "oo")` -> `"0"` both work. The P20/S1 power-size guard
+  (`graphcalc.limits.is_power_too_large`, the same "guard against hangs, as
+  in P28" fix) runs inside the shared `_parse`, so it also covers every
+  bound string, not just `"expr"`. Added
+  `tests/test_p20_cas_calculus.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

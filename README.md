@@ -501,7 +501,8 @@ protection for any long text they render later.
 ## Develop
 
 ```
-pip install -e . ruff pytest
+pip install -e . ruff pytest playwright
+python -m playwright install --with-deps chromium
 ruff check --no-cache --select E9,F63,F7,F82,F821 --output-format concise .
 python -m pytest -q --tb=short -p no:cacheprovider -rfE --no-header
 ```

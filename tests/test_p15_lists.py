@@ -19,16 +19,55 @@ character, and an empty name) and
 test_lists_delete_validation_bad_values_field (a missing "values" key and a
 non-list "values" value) prove the second half -- each case a JSON 400,
 never a 500.
+
+F3 (PRODUCT.md, plan step P15/S2): "Lists survive a restart with the same
+--state S, and POST /api/state/reset empties them."
+test_lists_persist_restart_across_server_restart proves the first half,
+through a real `python -m graphcalc --state S` subprocess started twice on
+the same state file -- the same pattern tests/test_p9_state_persistence.py's
+own test_p9_restart_persists_variable uses for a variable, now for a PUT
+/api/lists/<name> list instead. test_lists_persist_reset_empties_lists
+proves the second half, through an in-process server backed by a
+path-backed CalcState -- the same pattern test_p9_state_persistence.py's
+own test_p9_state_reset_empties_everything uses -- checking both the API
+(GET /api/lists, GET /api/lists/<name>) and the state file on disk.
+test_lists_persist_corrupted_entries_skipped_allows_evaluation proves the
+P26 "stored data never breaks later evaluations" rule, extended to lists by
+P15/S2's graphcalc.state._coerce_lists_dict: a hand-written state file with
+several differently-malformed "lists" entries (two bad names, a non-list
+value and a dict value, and a list of non-string items), alongside one
+well-formed list, still lets the server start, still evaluates a plain
+expression, and still serves the one well-formed list -- while every
+malformed entry is simply absent, never raised over.
+test_lists_persist_non_dict_lists_field_allows_evaluation proves the same
+rule for the coarser case where the whole "lists" field is not even a
+dict. test_lists_persist_calcstate_coerce is a fast, server-free unit check
+of _coerce_lists_dict directly, on the same hand-written bad entries.
 """
 
 import json
+import pathlib
+import socket
+import subprocess
+import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 
 import pytest
 
-from graphcalc.cli import build_server
+from graphcalc.cli import HEALTH_PATH, build_server
+from graphcalc.history import StateBackedHistoryStore
+from graphcalc.state import CalcState
+
+# graphcalc is not pip-installed in this environment -- `python -m graphcalc`
+# only resolves the package because the repo root happens to be on sys.path
+# (the implicit cwd entry `-m` adds) when a subprocess inherits this test
+# runner's own cwd, the same reasoning tests/test_p9_state_persistence.py's
+# own REPO_ROOT/_start_cli_subprocess give for why that file's restart test
+# never sets `cwd=`.
+REPO_ROOT = str(pathlib.Path(__file__).resolve().parent.parent)
 
 
 def _post(base, path, payload):
@@ -216,3 +255,216 @@ def test_lists_delete_validation_non_list_values_field(base):
     status, body = _put(base, "/api/lists/L1", {"values": "1,2,3"})
     assert status == 400, body
     assert "error" in body, body
+
+
+# ---- F3: lists survive a restart with the same --state S, and POST
+# /api/state/reset empties them ----
+
+
+def _free_port():
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def _wait_for_health(port, timeout=10):
+    """Poll /health until it answers, or raise after `timeout` seconds."""
+    deadline = time.time() + timeout
+    last_error = None
+    while time.time() < deadline:
+        try:
+            with urllib.request.urlopen(f"http://127.0.0.1:{port}{HEALTH_PATH}", timeout=1) as res:
+                return res.status, json.loads(res.read().decode("utf-8"))
+        except (urllib.error.URLError, ConnectionError) as exc:
+            last_error = exc
+            time.sleep(0.1)
+    raise AssertionError(f"server never answered /health: {last_error}")
+
+
+def _start_cli_subprocess(port, state_path):
+    return subprocess.Popen(
+        [sys.executable, "-m", "graphcalc", "--port", str(port), "--state", state_path],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+
+
+def _stop_cli_subprocess(proc):
+    proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait(timeout=5)
+
+
+def test_lists_persist_restart_across_server_restart(tmp_path):
+    """F3 (PRODUCT.md): "Lists survive a restart with the same --state S."
+
+    A real `python -m graphcalc --state S` subprocess, started twice on the
+    same state file -- the same pattern tests/test_p9_state_persistence.py's
+    own test_p9_restart_persists_variable uses for a variable, now proving
+    it for a PUT /api/lists/<name> list instead. The first process is always
+    terminated (in a finally block) before the second one starts, so the
+    file's own atomic write -- not two processes racing on it -- is what
+    carries "L1" across the restart.
+    """
+    state_path = str(tmp_path / "s.json")
+
+    port1 = _free_port()
+    proc1 = _start_cli_subprocess(port1, state_path)
+    try:
+        _wait_for_health(port1)
+        base1 = f"http://127.0.0.1:{port1}"
+        status, body = _put(base1, "/api/lists/L1", {"values": ["1", "2", "3"]})
+        assert status == 200, body
+        assert body == {"name": "L1", "values": ["1", "2", "3"]}, body
+    finally:
+        _stop_cli_subprocess(proc1)
+
+    port2 = _free_port()
+    proc2 = _start_cli_subprocess(port2, state_path)
+    try:
+        _wait_for_health(port2)
+        base2 = f"http://127.0.0.1:{port2}"
+        status, body = _get(base2, "/api/lists/L1")
+        assert status == 200, body
+        assert body == {"name": "L1", "values": ["1", "2", "3"]}, body
+
+        status, body = _get(base2, "/api/lists")
+        assert status == 200, body
+        assert body == {"lists": ["L1"]}, body
+    finally:
+        _stop_cli_subprocess(proc2)
+
+
+def test_lists_persist_reset_empties_lists(tmp_path):
+    """F3 (PRODUCT.md): "POST /api/state/reset empties them."
+
+    An in-process server backed by a path-backed CalcState -- the same
+    pattern tests/test_p9_state_persistence.py's own
+    test_p9_state_reset_empties_everything uses -- checking both the API
+    (GET /api/lists, GET /api/lists/<name>) and the state file on disk, then
+    restarting on the same path to prove the reset was actually saved, not
+    just reflected in the now-stopped server's in-memory state.
+    """
+    path = str(tmp_path / "state.json")
+    state = CalcState(path)
+    srv = build_server(0, history_store=StateBackedHistoryStore(state), state=state)
+    base = f"http://127.0.0.1:{srv.server_port}"
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    try:
+        status, body = _put(base, "/api/lists/L1", {"values": ["1", "2", "3"]})
+        assert status == 200, body
+
+        status, body = _post(base, "/api/state/reset", {})
+        assert status == 200, body
+        assert body == {"status": "reset"}, body
+
+        status, body = _get(base, "/api/lists")
+        assert status == 200, body
+        assert body == {"lists": []}, body
+
+        status, body = _get(base, "/api/lists/L1")
+        assert status == 404, body
+        assert "error" in body, body
+
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        assert data["lists"] == {}, data
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+    state2 = CalcState(path)
+    srv2 = build_server(0, history_store=StateBackedHistoryStore(state2), state=state2)
+    base2 = f"http://127.0.0.1:{srv2.server_port}"
+    threading.Thread(target=srv2.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    try:
+        status, body = _get(base2, "/api/lists")
+        assert status == 200, body
+        assert body == {"lists": []}, body
+    finally:
+        srv2.shutdown()
+        srv2.server_close()
+
+
+# ---- F3 / P26 extended to lists: a corrupted "lists" entry (or field)
+# must never block the server starting, a plain evaluation, or a
+# different, well-formed list stored alongside it ----
+
+_CORRUPTED_LISTS_FIELD = {
+    "L1": ["1", "2", "3"],  # well-formed -- must survive
+    "1bad": ["1", "2"],  # bad name: leading digit
+    "bad name": ["1", "2"],  # bad name: disallowed character (and a space)
+    "L2": "notalist",  # value is not a list at all
+    "L3": [1, 2],  # list of non-string items
+    "L4": {"a": 1},  # value is a dict, not a list
+}
+
+
+def test_lists_persist_corrupted_entries_skipped_allows_evaluation(tmp_path):
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"lists": _CORRUPTED_LISTS_FIELD}), encoding="utf-8")
+
+    state = CalcState(str(path))  # must not raise despite the garbage above
+    srv = build_server(0, history_store=StateBackedHistoryStore(state), state=state)
+    base = f"http://127.0.0.1:{srv.server_port}"
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    try:
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "1+1"})
+        assert status == 200, body
+        assert body["exact"] == "2", body
+
+        status, body = _get(base, "/api/lists")
+        assert status == 200, body
+        assert body == {"lists": ["L1"]}, body
+
+        status, body = _get(base, "/api/lists/L1")
+        assert status == 200, body
+        assert body == {"name": "L1", "values": ["1", "2", "3"]}, body
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_lists_persist_non_dict_lists_field_allows_evaluation(tmp_path):
+    """Same P26-for-lists rule as above, but the whole "lists" field itself
+    is the wrong JSON type (a bare number, not even a dict) -- the
+    whole-field fallback _coerce_lists_dict shares with _coerce_dict, not
+    the per-entry checks _CORRUPTED_LISTS_FIELD exercises above.
+    """
+    path = tmp_path / "state.json"
+    path.write_text(json.dumps({"lists": 5}), encoding="utf-8")
+
+    state = CalcState(str(path))  # must not raise
+    srv = build_server(0, history_store=StateBackedHistoryStore(state), state=state)
+    base = f"http://127.0.0.1:{srv.server_port}"
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
+    try:
+        status, body = _post(base, "/api/calc/evaluate", {"expr": "1+1"})
+        assert status == 200, body
+        assert body["exact"] == "2", body
+
+        status, body = _get(base, "/api/lists")
+        assert status == 200, body
+        assert body == {"lists": []}, body
+    finally:
+        srv.shutdown()
+        srv.server_close()
+
+
+def test_lists_persist_calcstate_coerce(tmp_path):
+    """Fast unit-level check of graphcalc.state._coerce_lists_dict, with no
+    server involved: CalcState built straight from a hand-written dict with
+    the same bad entries as above, plus a list containing a non-string
+    `None` item, comes back with only the one well-formed list.
+    """
+    path = tmp_path / "state.json"
+    lists_field = dict(_CORRUPTED_LISTS_FIELD)
+    lists_field["L5"] = [None]
+    path.write_text(json.dumps({"lists": lists_field}), encoding="utf-8")
+
+    state = CalcState(str(path))
+    assert state.lists() == {"L1": ["1", "2", "3"]}, state.lists()

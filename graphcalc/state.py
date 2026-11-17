@@ -42,9 +42,16 @@ JSON object, is treated the same as an empty "{}"; and any individual field
 of the wrong JSON type (e.g. "variables" stored as a string or a list
 instead of an object) falls back to that field's own empty default via
 _coerce_dict/_coerce_list below, rather than raising while reading it.
-Nothing in __init__ touches disk -- a load failure never triggers a write,
-so a corrupt file on disk is left exactly as it was found until the next
-actual change calls _save() and overwrites it with a valid one.
+"lists" goes one step further (plan step P15/S2, the same rule applied
+per-entry): besides the whole field falling back to {} if it is not even a
+dict, _coerce_lists_dict below also drops any individual entry whose name
+does not match graphcalc.lists.LIST_NAME_RE, whose value is not a list, or
+whose value contains a non-string item -- so a hand-edited or pre-P15 state
+file can never make a later /api/lists request, or an expression that
+references a list, raise. Nothing in __init__ touches disk -- a load
+failure never triggers a write, so a corrupt file on disk is left exactly
+as it was found until the next actual change calls _save() and overwrites
+it with a valid one.
 
 `--state PATH` (default "./graphcalc_state.json") and `--in-memory` are
 wired up in graphcalc/cli.py's main()/serve() (plan step P9/S2): `--state`
@@ -82,6 +89,59 @@ def _coerce_list(value) -> list:
     (plan step P9/S1).
     """
     return list(value) if isinstance(value, list) else []
+
+
+def _coerce_lists_dict(value) -> dict:
+    """Return a fresh name -> list[str] copy of the stored "lists" field,
+    dropping any entry that is not well-formed instead of raising (plan
+    step P15/S2, extending P26's "stored data never breaks later
+    evaluations" rule to named lists).
+
+    `value` itself must be a dict, the same whole-field fallback
+    _coerce_dict applies -- a non-dict "lists" field (e.g. hand-edited into
+    a string or a list) yields {}. Each entry within it is then checked on
+    its own, since a state file can be hand-edited or come from an older
+    version of this calculator:
+
+      - the key must be a string that fully matches graphcalc.lists.
+        LIST_NAME_RE -- the exact rule PUT /api/lists/<name> already
+        enforces, so a name that could never have been stored through the
+        API (e.g. a leading digit or underscore, a disallowed character, or
+        one over 16 characters) is dropped rather than resurfaced through
+        GET /api/lists or an expression that references it;
+      - the value must itself be a list (not e.g. a bare string); and
+      - every item in that list must be a string -- the only shape
+        graphcalc.calc.evaluate's element-by-element list evaluation
+        expects, and the only shape graphcalc.lists.validate_list_values
+        ever lets PUT /api/lists/<name> store.
+
+    A malformed entry is skipped as a whole -- never partially kept (e.g. a
+    list with a mix of string and non-string items is dropped entirely, not
+    filtered down to just its string items) -- so one corrupted list can
+    never affect another already-valid one, let alone an unrelated
+    evaluation. An empty list value is kept (validate_list_values never
+    lets the API store one, but a hand-edited file could, and get_list()
+    below already documents that case as a plain 200, not an error).
+
+    The import is deferred to avoid giving this otherwise dependency-free
+    module (json/os/tempfile only) a module-load-time dependency on
+    graphcalc.calc's sympy import, the same lazy-import pattern graphcalc.
+    cli.py already uses for graphcalc.lists/graphcalc.calc.
+    """
+    from graphcalc.lists import LIST_NAME_RE
+
+    if not isinstance(value, dict):
+        return {}
+    result = {}
+    for name, entry in value.items():
+        if not isinstance(name, str) or LIST_NAME_RE.fullmatch(name) is None:
+            continue
+        if not isinstance(entry, list):
+            continue
+        if not all(isinstance(item, str) for item in entry):
+            continue
+        result[name] = list(entry)
+    return result
 
 
 def _is_valid_ans(value) -> bool:
@@ -141,7 +201,12 @@ class CalcState:
             # then simply has no history/lists yet, the same defaulting
             # pattern as variable_sreprs/function_sreprs above.
             self._data["history"] = _coerce_list(loaded.get("history"))
-            self._data["lists"] = _coerce_dict(loaded.get("lists"))
+            # Per-entry validated, not just whole-field-coerced like the
+            # dicts above (plan step P15/S2): a hand-edited or pre-P15
+            # "lists" entry can have a malformed name, a non-list value, or
+            # a list with non-string items, none of which _coerce_dict
+            # alone would catch -- see _coerce_lists_dict.
+            self._data["lists"] = _coerce_lists_dict(loaded.get("lists"))
             stored_ans = loaded.get("ans")
             if _is_valid_ans(stored_ans):
                 self._data["ans"] = dict(stored_ans)

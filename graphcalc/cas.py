@@ -1,5 +1,5 @@
 """CAS algebra core for POST /api/cas/simplify, /expand, /factor,
-/derivative, /integral and /limit.
+/derivative, /integral, /limit and /solve.
 
 Plan step P19/S1 implemented simplify(expr); plan step P19/S2 added
 expand(expr) next to it in this same module; plan step P19/S3 added
@@ -8,10 +8,13 @@ var) next to them. Plan step P20/S2 adds integral(expr, var, lower=None,
 upper=None). Plan step P20/S3 adds limit(expr, var, point, dir=None).
 Plan step P20/S4 teaches _parse_bound (used by both integral() and
 limit()) to also accept an expression string such as "pi" or "oo" for
-"lower"/"upper"/"point", not just a bare JSON number.
-simplify(), expand(), factor(), derivative(), integral() and limit() are
-the only things graphcalc/cli.py calls from here; neither they nor _parse
-ever touches the network.
+"lower"/"upper"/"point", not just a bare JSON number. Plan step P21/S1
+adds solve(equation, var), returning a sorted list of exact solution
+strings instead of the single-string result every other operation here
+returns.
+simplify(), expand(), factor(), derivative(), integral(), limit() and
+solve() are the only things graphcalc/cli.py calls from here; neither
+they nor _parse ever touches the network.
 
 _parse(expr) turns `expr` into a sympy expression and is deliberately built
 the same way graphcalc.calc.evaluate() parses its own input (plan steps
@@ -128,6 +131,7 @@ from sympy import integrate as _sympy_integrate
 from sympy import limit as _sympy_limit
 from sympy import nsimplify
 from sympy import simplify as _sympy_simplify
+from sympy import solve as _sympy_solve
 from sympy.parsing.sympy_parser import parse_expr
 
 from graphcalc.calc import (
@@ -359,3 +363,51 @@ def limit(expr: str, var: str, point, dir=None) -> str:
     if result == zoo or result == nan:
         raise CalcError(f"limit does not exist: {expr}")
     return to_text(result)
+
+
+def solve(equation: str, var: str) -> list[str]:
+    """Solve `equation` for `var` and return its solutions as a sorted list
+    of "^"-notation exact strings (plan step P21/S1).
+
+    `equation` is either "lhs=rhs" or a bare expression taken to equal 0:
+    split on "=" first -- zero "=" means "expression = 0" (parts = [expr]),
+    exactly one "=" means "lhs = rhs" (parts = [lhs, rhs]), and more than
+    one "=" (e.g. "x=y=2") raises CalcError("invalid equation: ...") before
+    either side is ever parsed. Each side is parsed by this module's own
+    _parse -- the same grammar/whitelist every other CAS operation's "expr"
+    goes through -- and sympy.solve() runs against lhs - rhs. `var` must be
+    a plain ASCII identifier string, the same rule derivative(), integral()
+    and limit() already apply, checked before `equation` is even parsed.
+
+    e.g. solve("x^2=4", "x") -> ["-2", "2"]; solve("x^2+1", "x") ->
+    ["-I", "I"] (sympy.solve() already finds complex roots with no extra
+    domain hint); solve("2y+3=7", "y") -> ["2"]. The solutions are rendered
+    with to_text() (so "**" never leaks into a result) and then sorted as
+    plain strings -- "-2" sorts before "2" and "-I" before "I" because "-"
+    (0x2D) sorts below every digit and letter this calculator's output ever
+    uses, so this one sort rule happens to match both numeric and lexical
+    expectations for every case this plan step's own spec names. A
+    malformed `equation`, a malformed side, or anything sympy.solve() itself
+    raises, also raises CalcError, never any other exception.
+    """
+    if not isinstance(var, str) or not var.isascii() or not var.isidentifier():
+        raise CalcError(f"invalid variable: {var!r}")
+    if not isinstance(equation, str) or not equation.strip():
+        raise CalcError("missing parameter: equation")
+    parts = equation.split("=")
+    if len(parts) == 1:
+        lhs, rhs = parts[0], "0"
+    elif len(parts) == 2:
+        lhs, rhs = parts
+    else:
+        raise CalcError(f"invalid equation: {equation!r}")
+    lhs_parsed = _parse(lhs)
+    rhs_parsed = _parse(rhs)
+    symbol = Symbol(var)
+    try:
+        solutions = _sympy_solve(lhs_parsed - rhs_parsed, symbol)
+    except CalcError:
+        raise
+    except Exception as exc:
+        raise CalcError(f"invalid equation: {equation}") from exc
+    return sorted(to_text(solution) for solution in solutions)

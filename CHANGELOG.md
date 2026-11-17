@@ -482,6 +482,19 @@
   in P28" fix) runs inside the shared `_parse`, so it also covers every
   bound string, not just `"expr"`. Added
   `tests/test_p20_cas_calculus.py`.
+- `POST /api/cas/solve` (P21): takes `{"equation", "var"}` and answers
+  `{"solutions": [str, ...]}`, a sorted list of exact "^"-notation
+  solution strings, next to P19/P20's other CAS routes in
+  `graphcalc/cas.py`. `"equation"` is split on a single `"="` (zero `"="`
+  means the whole string is taken to equal `0`; more than one, e.g.
+  `"x=y=2"`, is a 400) and `sympy.solve()` runs against `lhs - rhs`:
+  `"x^2=4"` for `"x"` -> `["-2", "2"]`; `"x^2+1"` for `"x"` ->
+  `["-I", "I"]` (sympy already finds complex roots with no extra domain
+  hint); `"2y+3=7"` for `"y"` -> `["2"]`. `"var"` must be a plain ASCII
+  identifier string, the same rule `/derivative`, `/integral` and
+  `/limit` already apply; a missing or non-string `"var"` (or
+  `"equation"`) is a 400, never a 500. Added
+  `tests/test_p21_cas_solve.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

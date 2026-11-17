@@ -360,6 +360,81 @@ curl -s -X POST http://127.0.0.1:8000/api/graph/table \
 # {"error": "step must not be zero"}
 ```
 
+`POST /api/stats/onevar` computes one-variable statistics for a list already
+stored via `PUT /api/lists/<name>` (full list CRUD documentation is a
+follow-up -- see NOTES.md). Body `{"list": name}` answers 200 with
+`{"n": int, "mean", "median", "sum", "sx", "sigma_x", "min", "q1", "q3",
+"max"}`, each of the latter nine an `{"exact", "decimal"}` pair (`decimal` is
+the usual 12-significant-digit string). `sx` is the sample standard
+deviation (divides the sum of squared deviations by `n - 1`), `sigma_x` is
+the population standard deviation (divides by `n`), and `q1`/`q3` use the TI
+quartile method: each is the median of the sorted list's lower/upper half,
+leaving the overall median out of both halves when `n` is odd (`[1,2,3,4,5]`
+splits into `[1,2]`/`[4,5]`, never a half that still contains `3`), and
+splitting into two equal halves with nothing left out when `n` is even. A
+missing or non-string `"list"`, a malformed name, an undefined list name, or
+a stored list that is empty each answer 400 -- never the 404
+`GET /api/lists/<name>` gives for an unknown name, since this route's only
+successful response is a full statistics summary.
+
+```
+curl -s -X PUT http://127.0.0.1:8000/api/lists/L1 \
+  -H "Content-Type: application/json" \
+  -d '{"values": ["1", "2", "3", "4", "5"]}'
+# {"name": "L1", "values": ["1", "2", "3", "4", "5"]}
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/onevar \
+  -H "Content-Type: application/json" -d '{"list": "L1"}'
+# {"n": 5, "mean": {"exact": "3", "decimal": "3"}, "median": {"exact": "3", "decimal": "3"},
+#  "sum": {"exact": "15", "decimal": "15"}, "sx": {"exact": "sqrt(10)/2", "decimal": "1.58113883008"},
+#  "sigma_x": {"exact": "sqrt(2)", "decimal": "1.41421356237"}, "min": {"exact": "1", "decimal": "1"},
+#  "q1": {"exact": "3/2", "decimal": "1.5"}, "q3": {"exact": "9/2", "decimal": "4.5"},
+#  "max": {"exact": "5", "decimal": "5"}}
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/onevar \
+  -H "Content-Type: application/json" -d '{"list": "NOPE"}'
+# {"error": "no such list: NOPE"}
+```
+
+`POST /api/stats/regression` fits a least-squares curve to `x`/`y` data sent
+directly in the request body (not a stored list). Body `{"model":
+"linear"|"quadratic", "x": [str], "y": [str]}` answers 200 with `{"model",
+"coefficients": {"a","b"[,"c"]}, "r2", "points": [[x,y], ...], "curve":
+[[x,y], ...]}`: `"linear"` fits `y = a*x + b`, `"quadratic"` fits
+`y = a*x**2 + b*x + c`, both solved exactly (least-squares normal
+equations) from `x`/`y` parsed the same way a stored list's values are.
+Every coefficient, `r2`, and every `points`/`curve` number is a
+12-significant-digit decimal string with a clean `"0"` (never `"-0"` or
+`"1e-16"`) for an exact fit. `"points"` echoes the request's own `(x, y)`
+pairs in their original order; `"curve"` holds 50 points evenly spaced
+across `min(x)..max(x)` inclusive, each paired with the fit's predicted
+`y`. An unrecognized `"model"`, a malformed, empty, or mismatched-length
+`"x"`/`"y"`, a non-numeric entry, or a degenerate fit (fewer than 2
+distinct x values for `"linear"`, fewer than 3 for `"quadratic"`, or every
+`y` value equal) each answer 400 -- never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
+  -H "Content-Type: application/json" \
+  -d '{"model": "linear", "x": ["1", "2", "3"], "y": ["2", "4", "6"]}'
+# {"model": "linear", "coefficients": {"a": "2", "b": "0"}, "r2": "1",
+#  "points": [["1", "2"], ["2", "4"], ["3", "6"]],
+#  "curve": [["1", "2"], ["1.04081632653", "2.08163265306"], ..., ["3", "6"]]}
+# (50 points total, evenly spaced from x=1 to x=3)
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
+  -H "Content-Type: application/json" \
+  -d '{"model": "quadratic", "x": ["0", "1", "2", "3"], "y": ["1", "2", "5", "10"]}'
+# {"model": "quadratic", "coefficients": {"a": "1", "b": "0", "c": "1"}, "r2": "1",
+#  "points": [["0", "1"], ["1", "2"], ["2", "5"], ["3", "10"]],
+#  "curve": [["0", "1"], ["0.0612244897959", "1.00374843815"], ..., ["3", "10"]]}
+
+curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
+  -H "Content-Type: application/json" \
+  -d '{"model": "linear", "x": ["1", "2", "3"], "y": ["2", "4"]}'
+# {"error": "x and y must have the same length"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and
@@ -378,8 +453,17 @@ function slots and `samples` set to the canvas's own pixel width (`600`);
 the response's series are drawn onto `#graph-canvas` by mapping the window
 to pixel coordinates, breaking each series' path wherever its `y` sample is
 `null` so a domain gap (e.g. `"1/x"` at `x=0`) is never bridged by a
-straight line, and an axis is only drawn when `0` falls inside the window on
-that axis. With every function slot empty, no plot request is sent -- the
+straight line. The path is also broken between two consecutive *finite*
+samples that jump across a vertical asymptote falling between them (bug
+#40): a pole such as `1/x`'s `x=0`, `tan(x)`'s `x=pi/2`, or `1/(x-1)`'s
+`x=1` is essentially never sampled exactly, so its two neighbouring samples
+both come back as large-but-finite numbers of opposite sign, one on each
+side -- `app.js`'s `graphIsAsymptoteJump(y0, y1, ymin, ymax)` treats that
+jump as a break (never joined with `lineTo`) only when both samples are
+finite, they swing from positive to negative (or back), and the swing
+exceeds twice the window's own height, so a steep but still continuous
+curve such as `"10*x"` stays one unbroken line. An axis is only drawn when
+`0` falls inside the window on that axis. With every function slot empty, no plot request is sent -- the
 canvas just clears and redraws the axes. `#graph-zoom-in`/`#graph-zoom-out`
 POST `/api/graph/window` with `"factor": 2`, and the four pan buttons
 (`#graph-pan-left`/`#graph-pan-right`/`#graph-pan-up`/`#graph-pan-down`)
@@ -417,7 +501,8 @@ protection for any long text they render later.
 ## Develop
 
 ```
-pip install -e . ruff pytest
+pip install -e . ruff pytest playwright
+python -m playwright install --with-deps chromium
 ruff check --no-cache --select E9,F63,F7,F82,F821 --output-format concise .
 python -m pytest -q --tb=short -p no:cacheprovider -rfE --no-header
 ```

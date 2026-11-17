@@ -63,7 +63,7 @@ def _get(base, path):
 def server():
     """A fresh server with a default (in-memory) history store and state."""
     srv = build_server(0)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         yield srv
     finally:

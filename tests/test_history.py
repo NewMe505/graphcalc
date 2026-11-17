@@ -62,7 +62,7 @@ def server():
     """A fresh server, built with build_server's own injection hook so each
     test gets a brand-new, empty InMemoryHistoryStore -- never shared."""
     srv = build_server(0, history_store=InMemoryHistoryStore())
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         yield srv
     finally:

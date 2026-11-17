@@ -83,6 +83,11 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 - [ ] The same holds after {"expr":"a:=10^1000"} (the variable list), {"expr":"f(x):=x+10^1000"} (the function list), and a 400 whose error line echoes a long input (1,500 digits followed by "^^3")
 - [ ] GET /static/style.css sets overflow-wrap or word-break on body or .tab-panel, so long words break on every tab, including tabs built later
 
+### P34: Bug #40 fix: the Graphs tab never joins a curve across a vertical asymptote; the two branches stay separate, and a steep continuous curve is still drawn whole.
+- [ ] On the Graphs tab with f1 "1/x" and the window -5..5 on both axes, no pixel of graph-canvas within 2 px of the line x = 0 has f1's colour (#1f77b4), while f1's colour is drawn on both sides of it (left of x = -0.5 and right of x = 0.5)
+- [ ] The same holds for f1 "tan(x)" at x = pi/2 and for f1 "1/(x-1)" at x = 1, each in the window -5..5 on both axes
+- [ ] f1 "10*x" in the same window is one unbroken line: a pixel within 2 px of the canvas point for (0.25, 2.5) has f1's colour
+
 ### P5: Non-real results return 200 with an exact form and a rectangular complex form {"real","imag"}. 200 with a domain_error only when the math has no value (1/0, 0/0). 400 for client mistakes: syntax, missing or invalid parameters, redefining a constant. An undefined name is a symbol (as on the TI-Nspire CAS); decimal is null while a free name remains.
 - [ ] {"expr":"sqrt(-4)"} returns 200 with exact "2*I" and complex {"real":"0","imag":"2"}; {"expr":"ln(-1)"} returns exact "I*pi" and complex {"real":"0","imag":"3.14159265359"}
 - [ ] {"expr":"1/0"} returns 200 with exact null, decimal null and domain_error "division by zero"

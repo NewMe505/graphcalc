@@ -61,7 +61,7 @@ def server():
     the same way every other test in this repository builds a server.
     """
     srv = build_server(0)
-    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         yield srv
     finally:

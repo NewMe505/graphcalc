@@ -25,7 +25,7 @@ def test_no_arguments_prints_usage():
 
 def test_the_app_answers_its_health_path_and_404s_elsewhere():
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     try:
         base = f"http://127.0.0.1:{server.server_port}"
         with urllib.request.urlopen(base + HEALTH_PATH) as res:

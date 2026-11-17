@@ -61,6 +61,54 @@ with "x" and every column entry a 12-significant-digit decimal string or
 None for a non-real/undefined sample. A bad function slot, a missing/
 non-finite "start"/"step", a zero "step", or "rows" outside [1, 1000] is
 a 400. Also stateless, like the other three graph routes.
+
+Named-list CRUD (plan step P15/S1) lives at GET /api/lists, GET /api/lists/
+<name>, PUT /api/lists/<name> and DELETE /api/lists/<name> -- see
+_handle_lists_get_all, _handle_lists_get_one, _handle_lists_put and
+_handle_lists_delete, which defer name/value validation to graphcalc.lists
+and storage to the same CalcState every variable/function definition already
+uses (so a list survives a restart with --state, and POST /api/state/reset
+empties it, the same as variables and functions). Unlike the four graph
+routes above, this one is stateful. The trailing <name> path segment is
+decoded and validated by _list_name_from_segment, following the same
+decode-then-reject pattern _serve_static already uses for a /static/<name>
+segment (percent-decode, then reject a NUL byte or backslash) before
+checking it against graphcalc.lists.LIST_NAME_RE; a malformed name, a
+malformed body, or an invalid "values" entry is a 400, never a 500 or a
+404 -- 404 is reserved for a well-formed name that is simply not a stored
+list.
+
+POST /api/stats/onevar (plan steps P16/S1, P16/S2) lives next to the list CRUD
+routes above -- see _handle_stats_onevar, which reads body["list"] (a
+stored list name) through the same CalcState.get_list the GET /api/lists/
+<name> route already uses, then defers the actual statistics to
+graphcalc.stats.onevar(). The response is {"n": int, "mean", "median",
+"sum", "sx", "sigma_x", "min", "q1", "q3", "max"}, each of the latter nine
+an {"exact", "decimal"} pair (graphcalc.numfmt.format_decimal at 12
+significant digits for "decimal"); "sx"/"sigma_x" are the sample/
+population standard deviations, and "q1"/"q3" are the TI quartile
+method's lower/upper-half medians (see graphcalc.stats's own module
+docstring for the exact rule). Unlike GET /api/lists/<name>, an undefined
+list name here is a 400, not a 404 -- so is a missing "list" key or a
+stored list that is empty (never actually possible through PUT /api/lists/
+<name>'s own validation, but checked anyway rather than trusting a
+hand-edited state file): this route's only successful response is a full
+statistics summary, so there is no well-formed "empty" result to 200 with.
+
+POST /api/stats/regression (plan step P17/S1) lives next to POST /api/
+stats/onevar above -- see _handle_stats_regression, which is stateless:
+unlike onevar's stored-list lookup, this route's body carries "model",
+"x" and "y" directly, handed to graphcalc.stats.regression() exactly as
+received. The response is {"model", "coefficients": {"a","b"[,"c"]},
+"r2", "points": [[x,y], ...], "curve": [[x,y], ...]}, every coefficient/
+r2/points/curve number a 12-significant-digit decimal string (graphcalc.
+numfmt.format_decimal) with a clean "0" rather than "-0" or "1e-16" for an
+exact fit. "points" echoes the request's own ("x","y") pairs; "curve"
+holds 50 points evenly spaced across the data's x-range. "model" is
+"linear" or "quadratic" (see graphcalc.stats's own module docstring for
+each exact fit); an unrecognized "model", a malformed/mismatched-length
+"x"/"y", a non-numeric entry, or a degenerate fit (e.g. too few distinct x
+values) is a 400, never a 500.
 """
 
 import argparse
@@ -83,6 +131,10 @@ GRAPH_PLOT_PATH = "/api/graph/plot"
 GRAPH_WINDOW_PATH = "/api/graph/window"
 GRAPH_ANALYZE_PATH = "/api/graph/analyze"
 GRAPH_TABLE_PATH = "/api/graph/table"
+LISTS_PATH = "/api/lists"
+LISTS_PREFIX = "/api/lists/"
+STATS_ONEVAR_PATH = "/api/stats/onevar"
+STATS_REGRESSION_PATH = "/api/stats/regression"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -315,6 +367,15 @@ def _handle_calc_evaluate(handler):
     never a 500 (calc.evaluate turns sympy's BadArgumentsError into a
     CalcError).
 
+    `lists=_state(handler).lists()` is passed into every one of the three
+    calc.evaluate calls above (plan step P15/S3), the same way `variables`
+    and `functions` already are: an expr/rhs that references a stored list
+    name (e.g. "2*L1+1") is evaluated elementwise instead, exact
+    "[3, 5, 7]" -- see calc.evaluate's own docstring and
+    calc._evaluate_list_expression for the full rule. An expr/rhs that
+    references no list name at all behaves exactly as it did before this
+    feature existed.
+
     Everything above is wrapped in a catch-all: any exception this function
     did not anticipate (e.g. something calc.evaluate's own try/except does
     not cover) is still turned into a JSON 400, never left to propagate into
@@ -361,6 +422,7 @@ def _handle_calc_evaluate(handler):
                     last_entry=_state(handler).ans(),
                     variables=_state(handler).variable_entries(),
                     functions=_state(handler).function_entries(),
+                    lists=_state(handler).lists(),
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
@@ -389,6 +451,7 @@ def _handle_calc_evaluate(handler):
                     variables=_state(handler).variable_entries(),
                     functions=_state(handler).function_entries(),
                     symbols=params,
+                    lists=_state(handler).lists(),
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
@@ -413,6 +476,7 @@ def _handle_calc_evaluate(handler):
                 last_entry=_state(handler).ans(),
                 variables=_state(handler).variable_entries(),
                 functions=_state(handler).function_entries(),
+                lists=_state(handler).lists(),
             )
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})
@@ -588,6 +652,243 @@ def _handle_graph_table(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+# Named-list CRUD (plan step P15/S1).
+
+
+def _list_name_from_segment(segment):
+    """Decode and validate a trailing /api/lists/<name> path segment.
+
+    Follows the same decode-then-reject pattern _serve_static already uses
+    for a /static/<name> segment: percent-decode, then reject a NUL byte or
+    backslash, before handing the result to graphcalc.lists.
+    validate_list_name, which checks it against LIST_NAME_RE. Returns the
+    decoded name on success; raises graphcalc.calc.CalcError -- the same
+    type validate_list_name itself raises -- for a decode failure, a NUL
+    byte, or a backslash, so every caller below can catch just that one
+    exception type and turn it into the usual 400, the same way a bad name
+    that *does* decode cleanly but fails the regex already would.
+    """
+    from graphcalc.calc import CalcError
+    from graphcalc.lists import validate_list_name
+
+    try:
+        name = unquote(segment)
+    except (UnicodeDecodeError, ValueError):
+        raise CalcError(f"invalid list name: {segment!r}")
+    if "\x00" in name or "\\" in name:
+        raise CalcError(f"invalid list name: {name!r}")
+    validate_list_name(name)
+    return name
+
+
+def _handle_lists_get_all(handler):
+    """GET /api/lists -> 200 {"lists": [sorted names]} (plan step P15/S1)."""
+    try:
+        _send_json(handler, 200, {"lists": sorted(_state(handler).lists().keys())})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_lists_get_one(handler, segment):
+    """GET /api/lists/<name> -> 200 {"name","values"} or 404 (plan step
+    P15/S1). A malformed `segment` (not matching graphcalc.lists.
+    LIST_NAME_RE, a NUL byte, or a backslash -- see _list_name_from_segment)
+    is a 400, never a 404: 404 is reserved for a well-formed name that is
+    simply not a stored list.
+    """
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            name = _list_name_from_segment(segment)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        values = _state(handler).get_list(name)
+        if values is None:
+            _send_json(handler, 404, {"error": f"no such list: {name}"})
+            return
+        _send_json(handler, 200, {"name": name, "values": values})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_lists_put(handler, segment):
+    """PUT /api/lists/<name> {"values": [...]} -> 200 {"name","values"}
+    (plan step P15/S1). Overwrites any existing list already stored under
+    `name` -- PUT is upsert, same as PUT in general; there is no separate
+    "create" vs. "update" response.
+
+    A malformed name (see _list_name_from_segment), a malformed/non-object
+    JSON body, or an invalid "values" field -- not a list of strings,
+    empty, oversized, or containing a value graphcalc.calc.evaluate rejects
+    such as "abc+" (graphcalc.lists.validate_list_values) -- is a 400,
+    never a 500.
+
+    The request body is always read first, before the path-derived name is
+    even checked, the same order every other body-bearing route (_handle_
+    calc_evaluate, _handle_graph_plot/window/analyze/table) already uses.
+    A bad name is still a 400, but only after the body is drained: this
+    server answers with "HTTP/1.0" (Handler never sets protocol_version),
+    so BaseHTTPRequestHandler closes the TCP connection after every single
+    response. Closing a socket while the client's PUT body is still sitting
+    unread in the kernel receive buffer makes the OS send a TCP RST instead
+    of a clean FIN, which the client can observe as a connection-reset/
+    aborted error instead of ever seeing the 400 -- nondeterministically,
+    since it is a race between the server's close and the client finishing
+    its write/starting its read. Validating the name first (the order this
+    handler originally used) left that body undrained on every bad-name
+    PUT, which is exactly that race.
+    """
+    from graphcalc.calc import CalcError
+    from graphcalc.lists import validate_list_values
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            name = _list_name_from_segment(segment)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        values = payload.get("values")
+        try:
+            validate_list_values(values)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _state(handler).set_list(name, values)
+        _send_json(handler, 200, {"name": name, "values": list(values)})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_lists_delete(handler, segment):
+    """DELETE /api/lists/<name> -> 200 {"deleted": name} or 404 (plan step
+    P15/S1). A malformed name (see _list_name_from_segment) is a 400, the
+    same as GET/PUT; 404 is reserved for a well-formed name that is simply
+    not a stored list.
+    """
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            name = _list_name_from_segment(segment)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        if not _state(handler).delete_list(name):
+            _send_json(handler, 404, {"error": f"no such list: {name}"})
+            return
+        _send_json(handler, 200, {"deleted": name})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_stats_onevar(handler):
+    """POST /api/stats/onevar {"list": name} -> stats.onevar's dict, 200
+    JSON (plan steps P16/S1, P16/S2).
+
+    "list" must be a non-empty string naming a stored list -- a missing
+    "list" key, a non-string value, a name graphcalc.lists.
+    validate_list_name rejects (plan step P16/S2: reused here, the same
+    check PUT/GET/DELETE /api/lists/<name> already apply to a path-derived
+    name), a name graphcalc.state.CalcState.get_list does not recognize, or
+    (only reachable through a hand-edited state file, never through PUT
+    /api/lists/<name> itself) a stored but empty list -- the latter raised
+    as CalcError by graphcalc.stats.onevar itself, not checked here -- are
+    all a 400, never the 404 GET /api/lists/<name> itself would give for an
+    unknown name -- this route has no "well-formed but not found" response
+    to give, only a statistics summary or an error. Everything else is
+    handed to graphcalc.stats.onevar() unchanged; any exception it raises
+    (including the IndexError a one-element list's undefined TI quartile
+    halves raise -- see graphcalc.stats's own module docstring) is caught
+    by the blanket catch-all below, same as every other route's "never a
+    500" rule.
+    """
+    from graphcalc import stats
+    from graphcalc.calc import CalcError
+    from graphcalc.lists import validate_list_name
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        name = payload.get("list")
+        if not isinstance(name, str) or not name:
+            _send_json(handler, 400, {"error": "missing parameter: list"})
+            return
+        try:
+            validate_list_name(name)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        values = _state(handler).get_list(name)
+        if values is None:
+            _send_json(handler, 400, {"error": f"no such list: {name}"})
+            return
+        try:
+            result = stats.onevar(values)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_stats_regression(handler):
+    """POST /api/stats/regression {"model","x","y"} -> stats.regression's
+    dict, 200 JSON (plan step P17/S1).
+
+    Unlike _handle_stats_onevar, this route is stateless -- "x"/"y" are
+    sent in the request body, not read out of a stored list -- so "model",
+    "x", and "y" are handed to graphcalc.stats.regression() exactly as the
+    client sent them (including a missing or wrong-typed one, e.g. "x" not
+    present at all), and that pure function owns every validation decision:
+    an unrecognized "model" ("linear" and "quadratic" are implemented), a
+    malformed/empty/oversized "x" or "y" (graphcalc.lists.
+    validate_list_values, reused there the same way PUT /api/lists/<name>
+    already uses it), a non-string or unparseable entry, a non-real entry,
+    mismatched "x"/"y" lengths, or a degenerate fit (e.g. too few distinct
+    x values) are all raised as CalcError and turned into the same 400 here.
+    The blanket catch-all below still backs up any exception
+    graphcalc.stats.regression does not itself anticipate, the same
+    "never a 500" rule every other route already follows.
+    """
+    from graphcalc import stats
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = stats.regression(payload.get("model"), payload.get("x"), payload.get("y"))
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -605,6 +906,12 @@ class Handler(BaseHTTPRequestHandler):
     - POST /api/graph/window    -> see _handle_graph_window
     - POST /api/graph/analyze   -> see _handle_graph_analyze
     - POST /api/graph/table     -> see _handle_graph_table
+    - GET /api/lists            -> see _handle_lists_get_all
+    - GET /api/lists/<name>     -> see _handle_lists_get_one
+    - PUT /api/lists/<name>     -> see _handle_lists_put
+    - DELETE /api/lists/<name>  -> see _handle_lists_delete
+    - POST /api/stats/onevar    -> see _handle_stats_onevar
+    - POST /api/stats/regression -> see _handle_stats_regression
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -623,6 +930,12 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == CALC_VARS_PATH:
             _handle_calc_vars_get(self)
+            return
+        if self.path == LISTS_PATH:
+            _handle_lists_get_all(self)
+            return
+        if self.path.startswith(LISTS_PREFIX):
+            _handle_lists_get_one(self, self.path[len(LISTS_PREFIX) :])
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 
@@ -645,11 +958,26 @@ class Handler(BaseHTTPRequestHandler):
         if self.path == GRAPH_TABLE_PATH:
             _handle_graph_table(self)
             return
+        if self.path == STATS_ONEVAR_PATH:
+            _handle_stats_onevar(self)
+            return
+        if self.path == STATS_REGRESSION_PATH:
+            _handle_stats_regression(self)
+            return
+        _send_json(self, 404, {"error": f"not found: {self.path}"})
+
+    def do_PUT(self):
+        if self.path.startswith(LISTS_PREFIX):
+            _handle_lists_put(self, self.path[len(LISTS_PREFIX) :])
+            return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 
     def do_DELETE(self):
         if self.path == CALC_HISTORY_PATH:
             _handle_calc_history_delete(self)
+            return
+        if self.path.startswith(LISTS_PREFIX):
+            _handle_lists_delete(self, self.path[len(LISTS_PREFIX) :])
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

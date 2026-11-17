@@ -328,6 +328,78 @@
   contains each of those 17 ids exactly once (and `graph-canvas`, added in
   an earlier step, is still a `<canvas>`) and `GET /static/app.js` mentions
   the four `/api/graph/*` paths.
+- Named lists (P15/S1): `GET /api/lists` -> `{"lists": [sorted names]}`;
+  `GET /api/lists/<name>` -> `{"name","values"}` or a 404 JSON error;
+  `PUT /api/lists/<name> {"values": [...]}` -> 200, upserting the list
+  (overwrites any existing list under the same name); `DELETE
+  /api/lists/<name>` -> 200 `{"deleted": name}` or a 404. A list name must
+  fully match `[A-Za-z][A-Za-z0-9_]{0,15}`; `"values"` must be a non-empty,
+  non-oversized JSON array of strings, each checked with the same
+  `graphcalc.calc.evaluate` every `/api/calc/evaluate` request already goes
+  through (so a value such as `"abc+"` is a 400, same message as a bare
+  expression would get) -- stored as the original strings, never the
+  evaluated result, so a stored list can never break a later evaluation
+  (P26). A malformed name, body, or values entry is always a 400, never a
+  500; 404 is reserved for a well-formed name that is simply not a stored
+  list. Lists live in the same on-disk state file as variables/functions
+  (the `"lists"` key P9 already reserved for this): they survive a restart
+  with the same `--state`, and `POST /api/state/reset` empties them along
+  with everything else. Added `graphcalc/lists.py`
+  (`LIST_NAME_RE`/`validate_list_name`/`validate_list_values`),
+  `CalcState.get_list`/`set_list`/`delete_list` in `graphcalc/state.py`,
+  `do_PUT` plus the four `_handle_lists_*` handlers in `graphcalc/cli.py`,
+  and `tests/test_p15_lists.py`.
+- Named lists survive a restart and `POST /api/state/reset` (P15/S2):
+  `CalcState`'s on-disk loader now validates the `"lists"` field entry by
+  entry, not just as a whole -- any name not matching `LIST_NAME_RE`, any
+  value that is not a list, or any list containing a non-string item is
+  dropped on load instead of being resurfaced through `GET /api/lists` or
+  crashing a later evaluation (extending P26's "stored data never breaks
+  later evaluations" rule to a hand-edited or pre-P15 state file). CRUD
+  through `/api/lists` already wrote through atomically and `reset()`
+  already emptied `"lists"` since P9, so no further change was needed for
+  a list to survive `python -m graphcalc --state S` being stopped and
+  started again, or to be emptied by `POST /api/state/reset`.
+- Lists in expressions (P15/S3): `POST /api/calc/evaluate` now resolves a
+  stored list by name -- with `L1` set to `["1","2","3"]` via `PUT
+  /api/lists/L1`, `{"expr": "2*L1+1"}` answers 200 `exact` `"[3, 5, 7]"`.
+  Any expression that references, as a whole token, at least one stored
+  list name is evaluated elementwise instead of as a single scalar; a
+  plain number or a stored variable/function that is not itself one of
+  the referenced lists broadcasts across every index, and two lists used
+  together must share the same length or the request is a 400 (`"lists
+  have mismatched lengths: ..."`). The first element whose own evaluation
+  hits a `domain_error` short-circuits the whole result into that one
+  `domain_error`, the same shape a plain scalar domain error already has;
+  `decimal` and `complex` are always `null` for a list result, since
+  neither has a single rendering for a list, and referencing `ans` right
+  after leaves it undefined, the same as with no history at all. An
+  expression that references no stored list name behaves exactly as
+  before. `graphcalc/calc.py`'s `evaluate()` gained a `lists` parameter
+  (new `_evaluate_list_expression`/`_list_lengths_or_raise` helpers), and
+  `graphcalc/cli.py`'s calc-evaluate handler now passes
+  `lists=_state(handler).lists()` into every call.
+- `POST /api/stats/regression` (P17): least-squares curve fit for `x`/`y`
+  data sent directly in the request body. Body `{"model":
+  "linear"|"quadratic", "x": [str], "y": [str]}` answers 200 with
+  `{"model", "coefficients": {"a","b"[,"c"]}, "r2", "points": [[x,y], ...],
+  "curve": [[x,y], ...]}`: `"linear"` solves `y = a*x + b` and `"quadratic"`
+  solves `y = a*x**2 + b*x + c`, each from the exact least-squares normal
+  equations (`graphcalc/stats.py`'s new `_fit_linear`/`_fit_quadratic`, via
+  `sympy.Matrix.solve()` for the quadratic 3x3 system) over exact
+  Rational/Integer arithmetic, never a float. Every coefficient, `r2`, and
+  every `"points"`/`"curve"` number is a 12-significant-digit decimal
+  string with a clean `"0"` rather than `"-0"` or `"1e-16"` for an exact
+  fit (e.g. `x [1,2,3]`, `y [2,4,6]` answers `a "2"`, `b "0"`, `r2 "1"`).
+  `"points"` echoes the request's own `(x, y)` pairs in their original
+  order (not sorted); `"curve"` holds 50 points evenly spaced across the
+  data's own `min(x)..max(x)` (both endpoints exact), each paired with the
+  fit's predicted `y`. An unrecognized `"model"`, a malformed/empty/
+  oversized `"x"`/`"y"` (reusing `graphcalc.lists.validate_list_values`), a
+  non-string or non-numeric entry, mismatched `"x"`/`"y"` lengths, too few
+  distinct x values for the model (fewer than 2 for `"linear"`, fewer than
+  3 for `"quadratic"`), or every `y` value equal (`r2` undefined) each
+  answer 400, never a 500. Added `tests/test_p17_regression.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL
@@ -484,3 +556,30 @@
   a real 1280x900 page and asserts `scrollWidth <= innerWidth`, plus a
   plain static-content check that `style.css` sets `overflow-wrap` or
   `word-break` on `body`/`.tab-panel`).
+- Bug #40 (P34): the Graphs tab no longer joins a curve across a vertical
+  asymptote -- `f1 "1/x"` in the `-5..5` window used to draw a near-vertical
+  line in f1's colour straight through `x = 0`, visually welding its two
+  branches together, even though `POST /api/graph/plot` (P10) already
+  answered `y: null` for the one sample exactly on the pole: with 600
+  evenly spaced samples across `-5..5`, the pole itself falls *between*
+  two samples, so both of its neighbours come back as large-but-finite
+  floats and the canvas drew straight through the gap. `tan(x)` at its
+  poles and `1/(x-1)` at `x = 1` had the same problem. Fixed entirely in
+  `graphcalc/static/app.js`'s canvas draw loop (`graphDrawSeries`), between
+  new `// P34-BEGIN`/`// P34-END` markers: a new pure helper,
+  `graphIsAsymptoteJump(y0, y1, ymin, ymax)`, now also breaks the path
+  between two consecutive samples when both are finite, they swing from
+  positive to negative (or back), and the swing is more than twice the
+  window's own height -- never on a mere `null` gap, which already broke
+  the path before this fix. A steep but still continuous curve such as
+  `f1 "10*x"` stays one unbroken line: its jump between adjacent samples is
+  nowhere near the window's height. `graphcalc/graph.py`'s `plot()` and the
+  `POST /api/graph/plot` contract (P10) are unchanged. Added
+  `tests/test_p34_asymptote_break.py` (checks the helper is defined inside
+  the markers and that `graphDrawSeries` calls it, then -- when `node` is on
+  `PATH` -- runs the extracted helper against the exact `y` arrays
+  `graph.plot()` returns, confirming it breaks `1/x`, `tan(x)` and
+  `1/(x-1)` at their poles but leaves `10*x` whole) and
+  `tests/acceptance/test_p34_asymptote.py` (a real headless-browser check
+  that reads `graph-canvas`'s own pixels for each case; skips if the
+  acceptance harness has no browser).

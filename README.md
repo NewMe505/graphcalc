@@ -378,8 +378,17 @@ function slots and `samples` set to the canvas's own pixel width (`600`);
 the response's series are drawn onto `#graph-canvas` by mapping the window
 to pixel coordinates, breaking each series' path wherever its `y` sample is
 `null` so a domain gap (e.g. `"1/x"` at `x=0`) is never bridged by a
-straight line, and an axis is only drawn when `0` falls inside the window on
-that axis. With every function slot empty, no plot request is sent -- the
+straight line. The path is also broken between two consecutive *finite*
+samples that jump across a vertical asymptote falling between them (bug
+#40): a pole such as `1/x`'s `x=0`, `tan(x)`'s `x=pi/2`, or `1/(x-1)`'s
+`x=1` is essentially never sampled exactly, so its two neighbouring samples
+both come back as large-but-finite numbers of opposite sign, one on each
+side -- `app.js`'s `graphIsAsymptoteJump(y0, y1, ymin, ymax)` treats that
+jump as a break (never joined with `lineTo`) only when both samples are
+finite, they swing from positive to negative (or back), and the swing
+exceeds twice the window's own height, so a steep but still continuous
+curve such as `"10*x"` stays one unbroken line. An axis is only drawn when
+`0` falls inside the window on that axis. With every function slot empty, no plot request is sent -- the
 canvas just clears and redraws the axes. `#graph-zoom-in`/`#graph-zoom-out`
 POST `/api/graph/window` with `"factor": 2`, and the four pan buttons
 (`#graph-pan-left`/`#graph-pan-right`/`#graph-pan-up`/`#graph-pan-down`)

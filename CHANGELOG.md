@@ -297,6 +297,37 @@
   not count) `rows` outside `[1, 1000]` (`MIN_ROWS`/`MAX_ROWS`). Never a 500.
   Added `graphcalc.graph.table` (plus `MIN_ROWS`/`MAX_ROWS`),
   `graphcalc.cli._handle_graph_table`, and `tests/test_p13_graph_table.py`.
+- Graphs tab UI (P14): `GET /` now ships a working Graphs tab, not just the
+  static `graph-canvas` shell. `graphcalc/static/index.html` gains 17 new
+  ids inside `tab-graphs`: `graph-f1`..`graph-f4`, the window inputs
+  `graph-xmin`/`graph-xmax`/`graph-ymin`/`graph-ymax`, `graph-zoom-in`/
+  `graph-zoom-out`, the four pan buttons `graph-pan-left`/`graph-pan-right`/
+  `graph-pan-up`/`graph-pan-down`, `graph-trace-x`, `graph-analyze`, and a
+  new `graph-table` `<table>`. `graphcalc/static/app.js` wires all four
+  graph endpoints: a `change` on any function/window input (or Enter in
+  one) POSTs `/api/graph/plot` with only the non-empty `f1`-`f4` slots and
+  `samples` set to the canvas's own pixel width, then draws each returned
+  series onto `graph-canvas` by mapping the window to pixel coordinates and
+  breaking the path wherever that series' `y` sample is `null`, so a domain
+  gap is never bridged by a straight line; the zoom/pan buttons POST
+  `/api/graph/window` (`zoom_in`/`zoom_out` at factor 2, `pan` by a quarter
+  of the current window's width/height) and write the response straight
+  back into the window inputs before replotting; those same inputs are
+  seeded on load from a real `{"action": "standard"}` call rather than a
+  hard-coded `-10..10` literal; `graph-trace-x` plus `graph-analyze` POST
+  `{"operation": "value", "f": <first non-empty function slot>, "x":
+  <trace-x value>}` to `/api/graph/analyze` and show the result or its
+  `domain_error` in a plain status line `app.js` creates under the Analyze
+  button (no id of its own); and after every successful plot, `graph-table`
+  is rebuilt automatically, with no separate button, from
+  `/api/graph/table` (21 rows from `xmin`, step `(xmax - xmin) / 20`, one
+  column per non-empty function slot, a `null` cell rendered blank). A 400
+  from any of the four endpoints shows its `error` message in that same
+  status line. The Calculator tab's own ids and wiring are unchanged. Added
+  `tests/test_p14_graphs_ui.py`, pinning both acceptance criteria: `GET /`
+  contains each of those 17 ids exactly once (and `graph-canvas`, added in
+  an earlier step, is still a `<canvas>`) and `GET /static/app.js` mentions
+  the four `/api/graph/*` paths.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

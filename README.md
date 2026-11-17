@@ -370,16 +370,49 @@ zero"`). All of it lives in `graphcalc/static/app.js`, using plain `fetch()`
 on relative paths -- no build step, no external resources -- and the page
 still only draws what those three endpoints return.
 
+The Graphs tab (`tab-graphs`) is wired to all four graph endpoints, not just
+the static `#graph-canvas` shell. Changing any of `#graph-f1`..`#graph-f4`
+or the window inputs `#graph-xmin`/`#graph-xmax`/`#graph-ymin`/`#graph-ymax`
+(or pressing Enter in one) POSTs `/api/graph/plot` with only the non-empty
+function slots and `samples` set to the canvas's own pixel width (`600`);
+the response's series are drawn onto `#graph-canvas` by mapping the window
+to pixel coordinates, breaking each series' path wherever its `y` sample is
+`null` so a domain gap (e.g. `"1/x"` at `x=0`) is never bridged by a
+straight line, and an axis is only drawn when `0` falls inside the window on
+that axis. With every function slot empty, no plot request is sent -- the
+canvas just clears and redraws the axes. `#graph-zoom-in`/`#graph-zoom-out`
+POST `/api/graph/window` with `"factor": 2`, and the four pan buttons
+(`#graph-pan-left`/`#graph-pan-right`/`#graph-pan-up`/`#graph-pan-down`)
+POST it with `"dx"`/`"dy"` set to a quarter of the current window's
+width/height; either way the response is written straight back into the
+four window inputs before replotting. On load, those same four inputs are
+seeded from a real `{"action": "standard"}` call to `/api/graph/window`,
+not a hard-coded `-10..10` literal in `app.js`. `#graph-trace-x` plus
+`#graph-analyze` POST `{"operation": "value", "f": <first non-empty
+function slot>, "x": <trace-x value>}` to `/api/graph/analyze` and show the
+result (`"x = ..., y = ..."`) or its `domain_error` in a plain status line
+`app.js` creates under the Analyze button at runtime (it has no id of its
+own); the same status line also shows a 400 error from any of the four
+graph endpoints. After every successful plot, `#graph-table` is rebuilt
+automatically (there is no separate button for it) from `/api/graph/table`:
+21 rows starting at the window's `xmin`, stepped by `(xmax - xmin) / 20`,
+one column per non-empty function slot, with a `null` cell rendered blank. All of it
+lives in `graphcalc/static/app.js` too, same plain `fetch()` on relative
+paths; every plotted point, window, analysis result and table cell the
+Graphs tab shows comes from one of these four endpoints, never computed in
+the browser.
+
 A long result, value or error never widens the page: `graphcalc/static/
 style.css` sets `overflow-wrap: anywhere` (plus `word-break: break-word` for
 older browsers) on `body`, inherited by every tab panel, so an unbroken run
 of digits -- `"10^1000"`'s 1,001-digit exact value in `#calc-history`, the
 same value stored by `"a:=10^1000"` in `#calc-vars`, a function body such as
-`"f(x):=x+10^1000"`, or a bad expression long enough to echo into
-`#calc-error` -- wraps inside its own block instead of scrolling the whole
-page sideways. The rule lives on `body`, not on any one tab's elements, so
-the Graphs, Lists & Statistics and CAS tabs get the same protection for any
-long text they render later.
+`"f(x):=x+10^1000"`, a bad expression long enough to echo into
+`#calc-error`, or a long value/error in the Graphs tab's `#graph-table`
+cells or its analyze/error status line -- wraps inside its own block instead
+of scrolling the whole page sideways. The rule lives on `body`, not on any
+one tab's elements, so the Lists & Statistics and CAS tabs get the same
+protection for any long text they render later.
 
 ## Develop
 

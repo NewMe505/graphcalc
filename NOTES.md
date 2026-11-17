@@ -8,6 +8,74 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P14 (2026-11-17): Graphs tab UI. `graphcalc/static/index.html`,
+  `graphcalc/static/app.js`, `graphcalc/static/style.css`,
+  `tests/test_p14_graphs_ui.py`.
+  - Added the 17 new ids PRODUCT.md's acceptance criteria list inside the
+    existing `tab-graphs` panel; `graph-canvas` itself already existed from
+    an earlier step and is left untouched: `graph-f1`..`graph-f4`, the four
+    window inputs, the two zoom buttons, the four pan buttons,
+    `graph-trace-x`, `graph-analyze`, and a new `graph-table` `<table>`.
+    The Calculator tab's own ids/markup are untouched, confirmed directly
+    by `test_p14_index_graph_ids`.
+  - `app.js` reuses the Calculator tab's pattern (plain `fetch()` on
+    relative paths, no client framework, per the planner notes): a
+    function/window input's `change` or Enter re-POSTs `/api/graph/plot`
+    with only the non-empty `f1`-`f4` slots and `samples` set to the
+    canvas's own pixel width (600); the response's series are drawn by
+    mapping the window to pixel coordinates and breaking the path at every
+    `null` y-sample (planner notes: "draw the API's series on graph-canvas
+    with gaps where y is null"), so a domain gap (`"1/x"` at `x=0`) is
+    never bridged by a straight line. Zoom (factor 2) and pan (a quarter
+    of the current span per press) both go through `/api/graph/window`,
+    writing the response straight back into the window inputs before
+    replotting -- the server, never the client, computes the next window.
+    The window inputs are seeded on load from a real
+    `{"action":"standard"}` call, not a hard-coded `-10..10` literal in
+    `app.js`.
+  - `graph-analyze` only ever sends `operation:"value"` at the first
+    non-empty function slot and `graph-trace-x`'s value. `"zero"` is
+    already shipped server-side (P12/S1) but has no UI here either, same
+    as "minimum"/"maximum"/"intersection" (still a 400 server-side) --
+    there is no second-function or interval input on this tab, only a
+    single trace-x point. The result (or its `domain_error`) prints
+    into a plain `<p>` `app.js` creates and appends under the Analyze
+    button at runtime, not in `index.html` -- it has no id of its own,
+    since no acceptance criterion names one, and it still inherits
+    `body`'s `overflow-wrap`/`word-break` rule (P33) by being a plain
+    element inside `.tab-panel`.
+  - `graph-table` has no button of its own: it is rebuilt automatically
+    right after every successful plot, from a second POST to
+    `/api/graph/table` over the same window and functions (21 rows,
+    `start: xmin`, `step: (xmax-xmin)/20`), not a separate user action --
+    neither the acceptance criteria nor the planner notes specify how the
+    table refresh is triggered.
+  - `style.css` additions are layout-only (`.graph-controls`,
+    `.graph-functions`/`.graph-window`/`.graph-zoom-pan`/`.graph-analysis`
+    flex rows, `#graph-table` border/padding); the long-text wrap rule
+    itself is unchanged from P33's `body` rule, which `#graph-table`'s
+    cells and the new status line both inherit for free -- the one
+    `min-width: 0` addition on `#graph-table th/td` only stops the table's
+    own layout from stretching a cell wider than the wrap rule would
+    otherwise keep it, never a new wrap mechanism.
+  - Added `tests/test_p14_graphs_ui.py`: the F1 case (all 17 `graph-*` ids
+    present exactly once, `graph-canvas` still a `<canvas>`, the six
+    `calc-*` ids from P8 untouched) and the F2 case (`GET /static/app.js`
+    contains all four `/api/graph/*` paths plus `graph-canvas` and the
+    untouched `/api/calc/evaluate`). Both are static-content checks over a
+    real server, the same style `test_calc_ui.py` (P8) used -- no
+    in-process JS engine runs `app.js` itself, so the actual fetch/draw/
+    table behavior is left to a real browser, same caveat P8's notes
+    already recorded. Full suite: 365 passed, 4 skipped.
+  - Doc gap carried forward, not fixed here (out of this step's scope,
+    first flagged in the P13/S1 note below): README.md's "Use" section
+    still has no dedicated curl-example section for `/api/graph/analyze`
+    (P12), unlike `/api/graph/plot`/`/api/graph/window`/`/api/graph/table`.
+    This step's own README update documents the Graphs tab's *UI* wiring
+    to all four endpoints (including analyze), but does not add that
+    missing curl-example section. Still worth a follow-up pass.
+  - No plan drift, no design question: additive UI wiring over four
+    already-shipped endpoints, no change to any Python module.
 - P13/S1 (2026-11-17): `POST /api/graph/table`. `graphcalc/graph.py`,
   `graphcalc/cli.py`, `tests/test_p13_graph_table.py`.
   - `table()` deliberately reuses plot()'s own "functions" validation

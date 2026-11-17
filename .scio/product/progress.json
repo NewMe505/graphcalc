@@ -98,6 +98,21 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/35",
       "merged_commit": "3e682aa21d4e1f8e14b9a38ef526f82ece1cf1a6",
       "usd": 9.2876
+    },
+    {
+      "id": "M7",
+      "title": "Graph analysis, value table and Graphs tab UI",
+      "status": "done",
+      "branch": "milestone/7",
+      "features": [
+        "P12",
+        "P13",
+        "P14"
+      ],
+      "pr_number": 39,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/39",
+      "merged_commit": "000d6f732b2742eed5d0abc8e207b63088a8578b",
+      "usd": 9.5168
     }
   ],
   "features": [
@@ -214,32 +229,32 @@
     {
       "id": "P12",
       "description": "POST /api/graph/analyze takes {\"operation\":\"value\"|\"zero\"|\"minimum\"|\"maximum\"|\"intersection\",\"f\":expr,\"g\":expr (intersection),\"x\" (value),\"lower\",\"upper\"} and answers {\"operation\",\"x\",\"y\",\"domain_error\"} with decimals of 12 significant digits.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "1b3303fa51c2160fe2c0de98197440d6eed31127",
+      "thread": "build-graphcalc-m4-p12-a1",
+      "tier": "T1",
+      "issue": 36,
+      "usd": 4.9065
     },
     {
       "id": "P13",
       "description": "POST /api/graph/table takes {\"functions\",\"start\",\"step\",\"rows\"} and answers {\"x\":[str],\"columns\":{\"f1\":[str|null]}}.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "8cb3ecee97306207bc50f0bb66562fefb717e135",
+      "thread": "build-graphcalc-m4-p13-a1",
+      "tier": "T0",
+      "issue": 37,
+      "usd": 1.5994
     },
     {
       "id": "P14",
       "description": "The Graphs tab is wired to the graph endpoints and draws on the canvas.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "d896fc9ca8e45b5a8ea0908b0f93467f81649834",
+      "thread": "build-graphcalc-m4-p14-a1",
+      "tier": "T1",
+      "issue": 38,
+      "usd": 3.0109
     },
     {
       "id": "P15",
@@ -430,7 +445,17 @@
       "tier": "T0",
       "issue": 30,
       "usd": 1.2521
+    },
+    {
+      "id": "P34",
+      "description": "Bug #40 fix: the Graphs tab never joins a curve across a vertical asymptote; the two branches stay separate, and a steep continuous curve is still drawn whole.",
+      "status": "todo",
+      "commit": null,
+      "thread": null,
+      "tier": null,
+      "issue": null,
+      "usd": 0.0
     }
   ],
-  "updated": "2026-11-17T11:44:44+00:00"
+  "updated": "2026-11-17T15:23:01+00:00"
 }

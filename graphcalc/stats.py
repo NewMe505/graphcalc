@@ -63,11 +63,54 @@ Pow evaluation already rationalizes a quotient under a sqrt() on
 construction (e.g. sqrt(Rational(5, 2)) is built as sqrt(10)/2 directly),
 so the simplify() call in _stat is mostly a belt-and-suspenders step here,
 not what produces that form.
+
+regression(model, x, y) is POST /api/stats/regression's own pure
+computation (plan step P17/S1), living in this module since it shares
+onevar's "parse each entry to an exact sympy number, raise CalcError on
+anything that does not fit" shape -- the only difference is the numbers
+come straight off the request body ("x"/"y") instead of out of a stored
+list. Unlike a stored list's values, "x" and "y" are validated the same
+way PUT /api/lists/<name> validates a "values" array (graphcalc.lists.
+validate_list_values, reused here rather than reinvented): a non-list, an
+empty or oversized one, or a non-string/unparseable entry is rejected the
+same way. Each surviving string is then parsed by _to_exact_number, the
+same helper onevar() uses, and checked for is_real -- a value that parses
+but is not a plain real number (a bare symbol such as "x", "oo", or "zoo"
+from a "1/0" entry) is rejected here, since least-squares arithmetic on a
+symbolic value would not raise cleanly on its own.
+
+Only "linear" (y = a*x + b) is implemented by this step; fitting is
+dispatched through the small _FITS table keyed by model name, so a later
+step adding "quadratic" only needs one more entry there, not a change to
+regression()'s own validation/response-building. An unrecognized model
+name is CalcError the same as any other bad input. The linear fit solves
+the least-squares normal equations exactly with the input's own exact
+sympy numbers (no Rational() reconstruction needed -- xs/ys are already
+exact): a*Sxx + b*Sx = Sxy, a*Sx + b*n = Sy, solved directly for a and b.
+A zero denominator (n*Sxx - Sx**2, zero exactly when every x is equal,
+including the single-point n=1 case) is CalcError("regression requires at
+least two distinct x values") rather than a ZeroDivisionError -- this
+guard is also what keeps the later curve-building step from ever dividing
+by a zero x-range. r2 = 1 - SS_res/SS_tot; SS_tot = 0 (every y equal) is
+also CalcError, rather than a response with an undefined r2.
+
+Every coefficient, r2, and every "points"/"curve" entry is rendered with
+format_decimal(simplify(value), sig=12) by _regression_decimal -- the same
+"simplify, then format" order _stat uses above -- with a literal "-0"
+normalized to "0" as a last defensive step; an exact-arithmetic fit (this
+module parses every input as an exact Rational/Integer, same as onevar)
+never actually produces that sign on a true zero, but the normalization
+costs nothing and matches the planner notes' "clean zeros" requirement
+literally. "curve" samples 50 x values evenly spaced from min(x) to
+max(x) inclusive (both endpoints exact, computed directly from the exact
+x-range rather than plot()'s float-pinned last sample) and predicts y at
+each with the fit's own predict function.
 """
 
 from sympy import Rational, nsimplify, simplify, sqrt, sympify
 
 from graphcalc.calc import CalcError
+from graphcalc.lists import validate_list_values
 from graphcalc.numfmt import format_decimal
 
 
@@ -182,4 +225,150 @@ def onevar(values: list) -> dict:
         "q1": _stat(q1),
         "q3": _stat(q3),
         "max": _stat(sorted_numbers[-1]),
+    }
+
+
+# POST /api/stats/regression (plan step P17/S1).
+
+# 50 points across the data x-range -- "the curve has 50 points" (planner
+# notes), not configurable by the request the way graph.py's plot()
+# "samples" is.
+CURVE_POINTS = 50
+
+
+def _xy_to_numbers(values, label: str) -> list:
+    """Validate and parse one of the request's "x"/"y" arrays.
+
+    Reuses graphcalc.lists.validate_list_values for the exact same
+    structural/per-entry check PUT /api/lists/<name> already applies to a
+    "values" array: `values` must be a non-empty, non-oversized list of
+    strings, each one a calculator expression graphcalc.calc.evaluate can
+    parse. Every surviving string is then parsed into an exact sympy number
+    by _to_exact_number (the same helper onevar() uses above), and checked
+    for is_real -- a value that parses but is not a plain real number (a
+    bare symbol such as "x" itself, "oo", or "zoo" from a "1/0" entry) is
+    rejected here with CalcError, since the least-squares arithmetic below
+    has no other way to raise cleanly on a symbolic value.
+
+    `label` ("x" or "y") is only used to make a bad entry's message say
+    which array it came from.
+    """
+    validate_list_values(values)
+    numbers = [_to_exact_number(value) for value in values]
+    for value, number in zip(values, numbers):
+        if number.is_real is not True:
+            raise CalcError(f"{label} value is not a real number: {value!r}")
+    return numbers
+
+
+def _fit_linear(xs: list, ys: list) -> tuple:
+    """Least-squares fit y = a*x + b, solved exactly from the normal
+    equations a*Sxx + b*Sx = Sxy, a*Sx + b*n = Sy.
+
+    `xs`/`ys` are already exact sympy numbers (see _xy_to_numbers), so every
+    sum below (and the a/b it produces) stays an exact Rational/Integer --
+    no float ever enters this computation. The shared denominator
+    n*Sxx - Sx**2 is zero exactly when every x value is equal (including
+    the single-point n=1 case, where Sxx and Sx*Sx/n are trivially equal);
+    that is CalcError rather than a silent ZeroDivisionError, and it is
+    also what guarantees the x-range this function's caller later builds
+    "curve" from (min(xs)..max(xs)) is never a single degenerate point.
+
+    Returns ({"a": exact, "b": exact}, predict) where predict(x) = a*x + b.
+    """
+    n = len(xs)
+    sx = sum(xs)
+    sxx = sum(value * value for value in xs)
+    sy = sum(ys)
+    sxy = sum(x_value * y_value for x_value, y_value in zip(xs, ys))
+
+    denom = n * sxx - sx * sx
+    if denom == 0:
+        raise CalcError("regression requires at least two distinct x values")
+    a = (n * sxy - sx * sy) / denom
+    b = (sxx * sy - sx * sxy) / denom
+
+    def predict(x_value):
+        return a * x_value + b
+
+    return {"a": a, "b": b}, predict
+
+
+# Keyed by the request's "model" value; each entry is a _fit_linear-shaped
+# function (xs, ys) -> (coefficients, predict). Only "linear" is
+# implemented by this step -- a later step adding "quadratic" only needs
+# one more entry here, not a change to regression() itself.
+_FITS = {"linear": _fit_linear}
+
+
+def _regression_decimal(value) -> str:
+    """Render one regression coefficient/r2/points-or-curve entry as a
+    12-significant-digit decimal string.
+
+    Same "simplify, then format_decimal" order _stat uses above. A literal
+    "-0" is normalized to "0" as a last defensive step -- this module's
+    exact Rational/Integer arithmetic never actually produces that sign on
+    a true zero (unlike a float computation would), but the planner notes
+    ask for "clean zeros ('0', not '-0' ...)" literally, so this is cheap
+    insurance rather than something expected to ever actually trigger.
+    """
+    text = format_decimal(simplify(value), sig=12)
+    return "0" if text == "-0" else text
+
+
+def regression(model, x: list, y: list) -> dict:
+    """Compute a least-squares regression fit for POST /api/stats/regression.
+
+    `model` must be a key of _FITS (currently only "linear"); anything else
+    -- including a non-string, or "quadratic" before a later step adds it
+    -- is CalcError(f"unknown model: ..."). `x` and `y` are each validated
+    and parsed by _xy_to_numbers (see its own docstring); a mismatched
+    length between them is CalcError here, checked only after both have
+    already been validated individually, so a structurally bad `x` or `y`
+    is still reported as that specific problem rather than a generic
+    length mismatch.
+
+    The fit itself (_FITS[model]) raises CalcError for a degenerate input
+    (e.g. every x value equal); this function does not catch that, the
+    same backstop-by-the-caller pattern onevar() uses for its own
+    IndexError. r2 = 1 - SS_res/SS_tot is computed from the fit's own
+    predict function; SS_tot = 0 (every y value equal, making r2
+    undefined) is CalcError rather than a response with a meaningless r2.
+
+    Returns {"model", "coefficients": {name: decimal str, ...}, "r2":
+    decimal str, "points": [[x decimal, y decimal], ...], "curve": [[x
+    decimal, y decimal], ...]}. "points" holds the original ("x","y") pairs
+    in request order; "curve" holds CURVE_POINTS (50) pairs evenly spaced
+    from min(x) to max(x) inclusive (both endpoints exact, unlike
+    graph.py's plot() which pins only its last float sample), each paired
+    with the fit's predicted y. Every decimal string is _regression_decimal
+    (12 significant digits, clean zeros).
+    """
+    if not isinstance(model, str) or model not in _FITS:
+        raise CalcError(f"unknown model: {model!r}")
+
+    xs = _xy_to_numbers(x, "x")
+    ys = _xy_to_numbers(y, "y")
+    if len(xs) != len(ys):
+        raise CalcError("x and y must have the same length")
+
+    coefficients, predict = _FITS[model](xs, ys)
+
+    mean_y = sum(ys) / len(ys)
+    ss_tot = sum((y_value - mean_y) ** 2 for y_value in ys)
+    if ss_tot == 0:
+        raise CalcError("regression requires y values that are not all equal")
+    ss_res = sum((y_value - predict(x_value)) ** 2 for x_value, y_value in zip(xs, ys))
+    r2 = 1 - ss_res / ss_tot
+
+    xmin, xmax = min(xs), max(xs)
+    step = (xmax - xmin) / (CURVE_POINTS - 1)
+    curve_xs = [xmin + index * step for index in range(CURVE_POINTS)]
+
+    return {
+        "model": model,
+        "coefficients": {name: _regression_decimal(value) for name, value in coefficients.items()},
+        "r2": _regression_decimal(r2),
+        "points": [[_regression_decimal(x_value), _regression_decimal(y_value)] for x_value, y_value in zip(xs, ys)],
+        "curve": [[_regression_decimal(x_value), _regression_decimal(predict(x_value))] for x_value in curve_xs],
     }

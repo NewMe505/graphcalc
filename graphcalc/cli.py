@@ -94,6 +94,21 @@ stored list that is empty (never actually possible through PUT /api/lists/
 <name>'s own validation, but checked anyway rather than trusting a
 hand-edited state file): this route's only successful response is a full
 statistics summary, so there is no well-formed "empty" result to 200 with.
+
+POST /api/stats/regression (plan step P17/S1) lives next to POST /api/
+stats/onevar above -- see _handle_stats_regression, which is stateless:
+unlike onevar's stored-list lookup, this route's body carries "model",
+"x" and "y" directly, handed to graphcalc.stats.regression() exactly as
+received. The response is {"model", "coefficients": {"a","b"[,"c"]},
+"r2", "points": [[x,y], ...], "curve": [[x,y], ...]}, every coefficient/
+r2/points/curve number a 12-significant-digit decimal string (graphcalc.
+numfmt.format_decimal) with a clean "0" rather than "-0" or "1e-16" for an
+exact fit. "points" echoes the request's own ("x","y") pairs; "curve"
+holds 50 points evenly spaced across the data's x-range. Only "linear" is
+implemented by this step (see graphcalc.stats's own module docstring for
+the exact fit); an unrecognized "model", a malformed/mismatched-length
+"x"/"y", a non-numeric entry, or a degenerate fit (e.g. every x value
+equal) is a 400, never a 500.
 """
 
 import argparse
@@ -119,6 +134,7 @@ GRAPH_TABLE_PATH = "/api/graph/table"
 LISTS_PATH = "/api/lists"
 LISTS_PREFIX = "/api/lists/"
 STATS_ONEVAR_PATH = "/api/stats/onevar"
+STATS_REGRESSION_PATH = "/api/stats/regression"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -832,6 +848,47 @@ def _handle_stats_onevar(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_stats_regression(handler):
+    """POST /api/stats/regression {"model","x","y"} -> stats.regression's
+    dict, 200 JSON (plan step P17/S1).
+
+    Unlike _handle_stats_onevar, this route is stateless -- "x"/"y" are
+    sent in the request body, not read out of a stored list -- so "model",
+    "x", and "y" are handed to graphcalc.stats.regression() exactly as the
+    client sent them (including a missing or wrong-typed one, e.g. "x" not
+    present at all), and that pure function owns every validation decision:
+    an unrecognized "model" (only "linear" is implemented by this step), a
+    malformed/empty/oversized "x" or "y" (graphcalc.lists.
+    validate_list_values, reused there the same way PUT /api/lists/<name>
+    already uses it), a non-string or unparseable entry, a non-real entry,
+    mismatched "x"/"y" lengths, or a degenerate fit (e.g. every x value
+    equal) are all raised as CalcError and turned into the same 400 here.
+    The blanket catch-all below still backs up any exception
+    graphcalc.stats.regression does not itself anticipate, the same
+    "never a 500" rule every other route already follows.
+    """
+    from graphcalc import stats
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = stats.regression(payload.get("model"), payload.get("x"), payload.get("y"))
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -854,6 +911,7 @@ class Handler(BaseHTTPRequestHandler):
     - PUT /api/lists/<name>     -> see _handle_lists_put
     - DELETE /api/lists/<name>  -> see _handle_lists_delete
     - POST /api/stats/onevar    -> see _handle_stats_onevar
+    - POST /api/stats/regression -> see _handle_stats_regression
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -902,6 +960,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == STATS_ONEVAR_PATH:
             _handle_stats_onevar(self)
+            return
+        if self.path == STATS_REGRESSION_PATH:
+            _handle_stats_regression(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

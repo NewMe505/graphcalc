@@ -12,9 +12,10 @@ still loads cleanly, "ans" (the last plain evaluation's {"exact": str,
 list of the same {"expr", "exact", "decimal"} entries graphcalc.history.
 HistoryStore holds, oldest first -- see StateBackedHistoryStore in
 graphcalc/history.py, the HistoryStore implementation that reads and writes
-this list so a single JSON file backs both), and "lists" (name -> values,
-empty until a later feature, P15, adds CRUD for it -- kept here now so the
-on-disk shape, and POST /api/state/reset, do not have to change again then).
+this list so a single JSON file backs both), and "lists" (name -> list[str],
+CRUD added by P15/S1 -- see get_list/set_list/delete_list below; the key
+itself was already reserved here, empty, by P9/S1, so the on-disk shape,
+and POST /api/state/reset, did not have to change again for P15 to add it).
 
 "srepr" (and "body_srepr") is None for an entry stored by a version of this
 calculator before P26/S2, or loaded from a hand-edited file -- graphcalc.
@@ -303,13 +304,56 @@ class CalcState:
         self._save()
 
     def lists(self) -> dict:
-        """Return a fresh copy of the named-lists store (plan step P9/S1).
+        """Return a fresh copy of the named-lists store (plan step P9/S1;
+        CRUD added by P15/S1 -- see get_list/set_list/delete_list below).
 
-        Empty until a later feature (P15) adds CRUD for named lists; kept
-        here now, and included in reset() below, so the on-disk shape (and
-        POST /api/state/reset) will not need to change again then.
+        name -> list[str], each value the original string a PUT /api/lists/
+        <name> request stored (graphcalc.lists.validate_list_values having
+        already checked it parses), never an evaluated result.
         """
         return dict(self._data["lists"])
+
+    def get_list(self, name: str) -> list | None:
+        """Return a fresh copy of the named list's values, or None if `name`
+        is not a stored list (plan step P15/S1).
+
+        graphcalc.cli's GET /api/lists/<name> turns None into a 404; every
+        other value (including an empty list, which validate_list_values
+        never actually allows to be stored, but a hand-edited state file
+        could still contain) is a 200.
+        """
+        stored = self._data["lists"].get(name)
+        return list(stored) if stored is not None else None
+
+    def set_list(self, name: str, values: list) -> None:
+        """Store `values` under `name`, then save to disk if a path is set
+        (plan step P15/S1).
+
+        Overwrites any existing list already stored under `name` -- PUT
+        /api/lists/<name> is upsert, same as PUT in general. `values` is
+        stored as a fresh plain list of the original strings
+        graphcalc.lists.validate_list_values already checked -- never the
+        evaluated result -- the same "write through atomically" save path
+        set_variable/set_function already use.
+        """
+        self._data["lists"][name] = list(values)
+        self._save()
+
+    def delete_list(self, name: str) -> bool:
+        """Remove `name` from the lists store, then save to disk if a path
+        is set (plan step P15/S1).
+
+        Returns True if a list was actually removed, False if `name` was
+        not a stored list -- graphcalc.cli's DELETE /api/lists/<name> uses
+        this to tell a 200 {"deleted": name} from a 404 apart, and to avoid
+        an unnecessary save (and disk write) for a delete that removes
+        nothing.
+        """
+        if name not in self._data["lists"]:
+            return False
+        del self._data["lists"][name]
+        self._save()
+        return True
 
     def reset(self) -> None:
         """Empty variables, functions, lists, history and ans in one go,

@@ -9,6 +9,58 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P15/S1 (2026-11-17): named lists CRUD over `/api/lists`. `graphcalc/lists.py`
+  (new), `graphcalc/state.py`, `graphcalc/cli.py`, `tests/test_p15_lists.py`.
+  - `graphcalc/lists.py` is the single shared definition of what a list name
+    and a list's values are: `LIST_NAME_RE` (`[A-Za-z][A-Za-z0-9_]{0,15}`,
+    checked with `fullmatch`) and `validate_list_values` (a non-empty,
+    `MAX_LIST_VALUES`-bounded JSON array of strings, each run through
+    `graphcalc.calc.evaluate` so "abc+" 400s the same way it would as a bare
+    expression). Both raise `CalcError`, the one exception type every route
+    already turns into a 400, never a 500. Values are stored as the
+    original strings, never the evaluated result (P26: stored data must
+    never break a later evaluation).
+  - `CalcState.get_list`/`set_list`/`delete_list` write through to the same
+    on-disk JSON the `"lists"` key P9 already reserved, atomically, the same
+    save path `set_variable`/`set_function` use -- so a list survives a
+    restart with the same `--state`, and `reset()` (already emptying
+    `"lists"` since P9) empties it on `POST /api/state/reset` with no
+    further change needed there.
+  - `graphcalc/cli.py` adds `do_PUT`, `GET /api/lists`, `GET /api/lists/
+    <name>`, `PUT /api/lists/<name>`, `DELETE /api/lists/<name>`. The
+    trailing `<name>` segment is decoded/validated by
+    `_list_name_from_segment`, reusing `_serve_static`'s own decode-then-
+    reject pattern (percent-decode, then reject a NUL byte or backslash)
+    ahead of the `LIST_NAME_RE` check. `_handle_lists_put` reads the request
+    body (`_read_json_body`, which only ever reads exactly `Content-Length`
+    bytes) *before* validating the name, deliberately: on this HTTP/1.0,
+    close-after-every-response server, validating the name first left a
+    PUT's body unread on a bad-name request, racing the server's own socket
+    close against the client still writing -- an intermittent
+    connection-reset instead of a clean 400.
+  - Not done in this step (left for a later P15 sub-step/S2, not asked for
+    here): using a stored list inside `/api/calc/evaluate` (PRODUCT.md's own
+    `"2*L1+1"` -> exact `"[3, 5, 7]"` example). No test exercises it yet.
+  - Fixed a real-but-separate problem found while verifying this step: the
+    full suite (`pytest` with no filter) took 132.16s end to end -- over the
+    orchestrator's 120s `run_tests all` cutoff -- even though both of this
+    step's own filtered runs (`lists_crud`, `lists_delete_validation`) and
+    every individual test in `tests/test_p15_lists.py` passed instantly, with
+    no hang anywhere in a full `-v` run. Root cause: ~29 test files each
+    define their own function-scoped `server`/`base` fixture with
+    `threading.Thread(target=srv.serve_forever, daemon=True).start()` /
+    `srv.shutdown()`; `shutdown()` blocks until `serve_forever`'s loop next
+    polls the shutdown flag, which only happens every `poll_interval`
+    (stdlib default 0.5s, never overridden anywhere in this repo). Adding
+    this step's own 17 new per-test servers was enough extra cumulative
+    teardown latency to tip the suite over 120s. Fixed by passing
+    `kwargs={"poll_interval": 0.01}` to every one of those 29
+    `threading.Thread(...)` calls (`tests/test_p15_lists.py` plus 28 other
+    test files sharing the exact same construct, found via `rg
+    serve_forever tests/`) -- a teardown-speed-only change, no behavior
+    difference in what any test asserts. Full suite afterward: 392 passed, 4
+    skipped in 17.99s.
+
 - P34 (2026-11-17): bug #40, asymptote break. `graphcalc/static/app.js`,
   `tests/test_p34_asymptote_break.py`, `tests/acceptance/test_p34_asymptote.py`,
   `tests/acceptance/conftest.py`.

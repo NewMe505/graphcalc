@@ -82,7 +82,7 @@ def _post(base, path, payload):
 
 
 def _start(server):
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     return f"http://127.0.0.1:{server.server_port}"
 
 

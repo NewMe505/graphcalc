@@ -328,6 +328,27 @@
   contains each of those 17 ids exactly once (and `graph-canvas`, added in
   an earlier step, is still a `<canvas>`) and `GET /static/app.js` mentions
   the four `/api/graph/*` paths.
+- Named lists (P15/S1): `GET /api/lists` -> `{"lists": [sorted names]}`;
+  `GET /api/lists/<name>` -> `{"name","values"}` or a 404 JSON error;
+  `PUT /api/lists/<name> {"values": [...]}` -> 200, upserting the list
+  (overwrites any existing list under the same name); `DELETE
+  /api/lists/<name>` -> 200 `{"deleted": name}` or a 404. A list name must
+  fully match `[A-Za-z][A-Za-z0-9_]{0,15}`; `"values"` must be a non-empty,
+  non-oversized JSON array of strings, each checked with the same
+  `graphcalc.calc.evaluate` every `/api/calc/evaluate` request already goes
+  through (so a value such as `"abc+"` is a 400, same message as a bare
+  expression would get) -- stored as the original strings, never the
+  evaluated result, so a stored list can never break a later evaluation
+  (P26). A malformed name, body, or values entry is always a 400, never a
+  500; 404 is reserved for a well-formed name that is simply not a stored
+  list. Lists live in the same on-disk state file as variables/functions
+  (the `"lists"` key P9 already reserved for this): they survive a restart
+  with the same `--state`, and `POST /api/state/reset` empties them along
+  with everything else. Added `graphcalc/lists.py`
+  (`LIST_NAME_RE`/`validate_list_name`/`validate_list_values`),
+  `CalcState.get_list`/`set_list`/`delete_list` in `graphcalc/state.py`,
+  `do_PUT` plus the four `_handle_lists_*` handlers in `graphcalc/cli.py`,
+  and `tests/test_p15_lists.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

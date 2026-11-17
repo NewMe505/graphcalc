@@ -27,7 +27,7 @@ from graphcalc.names import check_not_constant
 
 def _start_server():
     server = HTTPServer(("127.0.0.1", 0), Handler)
-    threading.Thread(target=server.serve_forever, daemon=True).start()
+    threading.Thread(target=server.serve_forever, kwargs={"poll_interval": 0.01}, daemon=True).start()
     return server
 
 

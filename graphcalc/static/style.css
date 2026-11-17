@@ -43,3 +43,54 @@ body {
   border: 1px solid #ccc;
   background: #fff;
 }
+
+.graph-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 1rem;
+  margin-bottom: 0.5rem;
+}
+
+.graph-functions,
+.graph-window,
+.graph-zoom-pan,
+.graph-analysis {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.graph-analysis {
+  margin-top: 0.5rem;
+}
+
+.graph-functions label,
+.graph-window label,
+.graph-analysis label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+}
+
+.graph-functions input,
+.graph-window input,
+#graph-trace-x {
+  width: 6rem;
+}
+
+#graph-table {
+  border-collapse: collapse;
+  margin-top: 0.5rem;
+}
+
+#graph-table th,
+#graph-table td {
+  border: 1px solid #ccc;
+  padding: 0.25rem 0.5rem;
+  /* Table cells can hold long decimal/exact values from the API; the
+     global overflow-wrap/word-break rules on body already cover this,
+     but min-width 0 keeps a flex/table layout from stretching to fit an
+     unbroken run instead of wrapping it (P33). */
+  min-width: 0;
+}

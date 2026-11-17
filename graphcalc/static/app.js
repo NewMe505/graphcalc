@@ -548,4 +548,151 @@
     // plot -- consistent with "the page only draws what the API returns."
     graphWindowAction({ action: "standard" });
   }
+
+  // ---- Lists & Statistics tab: wired to /api/lists and /api/stats/onevar
+  // (plan step P18/S2). Wiring /api/stats/regression and stats-canvas is a
+  // later step. Same as the Calculator and Graphs tabs above, the page
+  // only draws what the API returns -- no client-side math, ever.
+  var LISTS_PATH = "/api/lists";
+  var STATS_ONEVAR_PATH = "/api/stats/onevar";
+
+  var listsTabButton = document.querySelector('.tab-button[data-tab="tab-lists"]');
+  var listGrid = document.getElementById("list-grid");
+  var statsList = document.getElementById("stats-list");
+  var statsOutput = document.getElementById("stats-output");
+  var regressionX = document.getElementById("regression-x");
+  var regressionY = document.getElementById("regression-y");
+
+  if (listGrid && statsList && statsOutput) {
+    function listsShowStatsError(message) {
+      statsOutput.textContent = message || "";
+    }
+
+    // Same {"exact","decimal"} formatting rule calcFormatResult above
+    // already applies to a /api/calc/evaluate entry: "decimal" is shown
+    // alongside "exact" only when they actually differ, so an integer
+    // result such as mean=3 (exact "3", decimal "3") shows plainly as "3",
+    // never "3 = 3" or a raw "3.0". A plain (non-{exact,decimal}) value
+    // such as "n" is just stringified.
+    function statsFormatValue(value) {
+      if (value && typeof value === "object" && "exact" in value) {
+        if (value.decimal && value.decimal !== value.exact) {
+          return value.exact + " = " + value.decimal;
+        }
+        return value.exact;
+      }
+      return String(value);
+    }
+
+    function listsRenderGrid(lists) {
+      listGrid.innerHTML = "";
+      lists.forEach(function (entry) {
+        var block = document.createElement("div");
+        var heading = document.createElement("h3");
+        heading.textContent = entry.name;
+        block.appendChild(heading);
+        var valueList = document.createElement("ul");
+        (entry.values || []).forEach(function (value) {
+          var item = document.createElement("li");
+          item.textContent = value;
+          valueList.appendChild(item);
+        });
+        block.appendChild(valueList);
+        listGrid.appendChild(block);
+      });
+    }
+
+    function listsFillSelect(select, lists) {
+      if (!select) {
+        return;
+      }
+      select.innerHTML = "";
+      lists.forEach(function (entry) {
+        var option = document.createElement("option");
+        option.value = entry.name;
+        option.textContent = entry.name;
+        select.appendChild(option);
+      });
+    }
+
+    // GET /api/lists only returns names (plan step P15/S1) -- each list's
+    // own values come from a separate GET /api/lists/<name>, fetched in
+    // parallel so list-grid, stats-list, regression-x and regression-y all
+    // render/fill once, not one list at a time.
+    function loadLists() {
+      return fetch(LISTS_PATH)
+        .then(function (res) {
+          return res.json();
+        })
+        .then(function (data) {
+          var names = data.lists || [];
+          return Promise.all(
+            names.map(function (name) {
+              return fetch(LISTS_PATH + "/" + encodeURIComponent(name)).then(function (res) {
+                return res.json();
+              });
+            })
+          );
+        })
+        .then(function (lists) {
+          listsRenderGrid(lists);
+          listsFillSelect(statsList, lists);
+          listsFillSelect(regressionX, lists);
+          listsFillSelect(regressionY, lists);
+        });
+    }
+
+    function statsRenderOutput(data) {
+      statsOutput.innerHTML = "";
+      var dl = document.createElement("dl");
+      Object.keys(data).forEach(function (key) {
+        var dt = document.createElement("dt");
+        dt.textContent = key;
+        var dd = document.createElement("dd");
+        dd.textContent = statsFormatValue(data[key]);
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      });
+      statsOutput.appendChild(dl);
+    }
+
+    // The stats-list dropdown's change handler: POSTs the chosen list to
+    // /api/stats/onevar and renders the returned statistics verbatim, or
+    // the JSON error message from a 400 (e.g. an empty list), into
+    // stats-output.
+    function statsRefreshOnevar() {
+      var name = statsList.value;
+      if (!name) {
+        statsOutput.innerHTML = "";
+        return;
+      }
+      fetch(STATS_ONEVAR_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ list: name }),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            listsShowStatsError(result.data.error || "error");
+            return;
+          }
+          statsRenderOutput(result.data);
+        })
+        .catch(function (err) {
+          listsShowStatsError(String(err));
+        });
+    }
+
+    statsList.addEventListener("change", statsRefreshOnevar);
+
+    document.addEventListener("DOMContentLoaded", loadLists);
+    if (listsTabButton) {
+      listsTabButton.addEventListener("click", loadLists);
+    }
+  }
 })();

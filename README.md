@@ -470,6 +470,77 @@ curl -s -X POST http://127.0.0.1:8000/api/cas/factor \
 # {"error": "invalid expression: x+"}
 ```
 
+`POST /api/cas/derivative`, `POST /api/cas/integral` and `POST /api/cas/limit`
+round out the CAS calculus set next to `/simplify`/`/expand`/`/factor`, same
+stateless rules (no stored ans/variables/functions/lists, no `rad`/`deg`
+mode) and the same `expr` grammar/whitelist:
+
+- `/derivative` -- body `{"expr": str, "var": str}` answers 200
+  `{"result": str}`: runs sympy's `diff()` with respect to `var`
+  (`{"expr": "x*sin(x)", "var": "x"}` -> `"x*cos(x) + sin(x)"`). `var` must
+  be a plain ASCII identifier (e.g. `"x"`, never `"x+1"` or `"2"`); anything
+  else is a 400 before `expr` is even parsed.
+- `/integral` -- body `{"expr": str, "var": str, "lower", "upper"}`, both
+  bounds optional. With neither, the indefinite integral:
+  `{"expr": "x^2", "var": "x"}` -> `"x^3/3"`. With both, the definite one:
+  `{"expr": "x^2", "var": "x", "lower": 0, "upper": 1}` -> `"1/3"`. Supplying
+  only one of `lower`/`upper` is a 400 (a definite integral needs both ends
+  or neither); an integral sympy cannot find a closed form for answers 400
+  `"no closed form"` rather than echoing the input back as if it were an
+  answer.
+- `/limit` -- body `{"expr": str, "var": str, "point", "dir"}`, `dir`
+  optional. With no `dir`, sympy's own two-sided limit:
+  `{"expr": "sin(x)/x", "var": "x", "point": 0}` -> `"1"`. `"+"` or `"-"`
+  for a one-sided limit: `{"expr": "1/x", "var": "x", "point": 0, "dir":
+  "+"}` -> `"oo"`. Any other `dir` (including a non-string) is a 400 before
+  `expr` is even parsed. A limit sympy cannot resolve -- it raises (the two
+  one-sided limits disagree) or hands back its own `zoo`/`nan` instead of a
+  value (the two-sided limit of `"1/x"` at `0`) -- is also a 400, never a
+  200 echoing an undefined result.
+
+`lower`, `upper` and `point` each accept either a plain JSON number (a
+`bool`, or a non-finite float such as `NaN`/`Infinity`, is rejected) or an
+expression string such as `"pi"` or `"oo"`/`"-oo"` (the spelled-out
+`"infinity"`/`"-infinity"` also work): `"oo"`/`"-oo"` map straight to
+sympy's own infinity, and any other string is parsed with the same
+grammar/whitelist `expr` itself uses and must come back with no free
+symbols -- `"pi"` and `"2*pi"` work, a bare name such as `"y"` or a
+malformed string such as `"x+"` are both 400s. `var` must be a plain ASCII
+identifier for all three routes, the same rule `/derivative` already
+applies. Never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/cas/derivative \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "x*sin(x)", "var": "x"}'
+# {"result": "x*cos(x) + sin(x)"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/integral \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "x^2", "var": "x", "lower": 0, "upper": 1}'
+# {"result": "1/3"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/integral \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "sin(x)", "var": "x", "lower": 0, "upper": "pi"}'
+# {"result": "2"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/limit \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "sin(x)/x", "var": "x", "point": 0}'
+# {"result": "1"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/limit \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "1/x", "var": "x", "point": 0, "dir": "+"}'
+# {"result": "oo"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/limit \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "1/x", "var": "x", "point": "oo"}'
+# {"result": "0"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and

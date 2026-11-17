@@ -136,6 +136,7 @@ LISTS_PREFIX = "/api/lists/"
 STATS_ONEVAR_PATH = "/api/stats/onevar"
 STATS_REGRESSION_PATH = "/api/stats/regression"
 CAS_SIMPLIFY_PATH = "/api/cas/simplify"
+CAS_EXPAND_PATH = "/api/cas/expand"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -890,23 +891,23 @@ def _handle_stats_regression(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
-def _handle_cas_simplify(handler):
-    """POST /api/cas/simplify {"expr"} -> 200 JSON {"result": str} (plan
-    step P19/S1).
+def _handle_cas_op(handler, op):
+    """Shared body for every stateless POST /api/cas/<op> route (plan step
+    P19/S2 pulls this out of what was _handle_cas_simplify alone in P19/S1,
+    so /simplify and /expand -- and /factor, when a later plan step adds
+    it -- share one handler instead of three near-identical copies).
 
-    Stateless, like _handle_stats_regression: "expr" is handed to
-    graphcalc.cas.simplify() exactly as the client sent it, and that
-    function owns every parsing/simplification decision -- see graphcalc.
-    cas's own module docstring for the full grammar/whitelist rule it
-    shares with graphcalc.calc.evaluate. A malformed body, a non-object
-    body, a missing or non-string "expr", or a graphcalc.calc.CalcError
-    from graphcalc.cas.simplify (bad grammar, an unknown function call, or
-    anything else parse_expr itself rejects) is a JSON 400. The blanket
-    catch-all below still backs up any exception neither of those
-    anticipates, the same "never a 500" rule every other route already
-    follows.
+    `op` is one of graphcalc.cas's own functions (simplify, expand, ...):
+    "expr" is handed to it exactly as the client sent it, and that function
+    owns every parsing/algebra decision -- see graphcalc.cas's own module
+    docstring for the full grammar/whitelist rule it shares with graphcalc.
+    calc.evaluate. A malformed body, a non-object body, a missing or
+    non-string "expr", or a graphcalc.calc.CalcError from `op` (bad
+    grammar, an unknown function call, or anything else parse_expr itself
+    rejects) is a JSON 400. The blanket catch-all below still backs up any
+    exception neither of those anticipates, the same "never a 500" rule
+    every other route already follows.
     """
-    from graphcalc import cas
     from graphcalc.calc import CalcError
 
     try:
@@ -923,13 +924,31 @@ def _handle_cas_simplify(handler):
             _send_json(handler, 400, {"error": "missing parameter: expr"})
             return
         try:
-            result = cas.simplify(expr)
+            result = op(expr)
         except CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})
             return
         _send_json(handler, 200, {"result": result})
     except Exception as exc:  # catch-all: this endpoint must never answer with a 500
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_cas_simplify(handler):
+    """POST /api/cas/simplify {"expr"} -> 200 JSON {"result": str} (plan
+    step P19/S1). See _handle_cas_op for the shared body this delegates to.
+    """
+    from graphcalc import cas
+
+    _handle_cas_op(handler, cas.simplify)
+
+
+def _handle_cas_expand(handler):
+    """POST /api/cas/expand {"expr"} -> 200 JSON {"result": str} (plan step
+    P19/S2). See _handle_cas_op for the shared body this delegates to.
+    """
+    from graphcalc import cas
+
+    _handle_cas_op(handler, cas.expand)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -956,6 +975,7 @@ class Handler(BaseHTTPRequestHandler):
     - POST /api/stats/onevar    -> see _handle_stats_onevar
     - POST /api/stats/regression -> see _handle_stats_regression
     - POST /api/cas/simplify    -> see _handle_cas_simplify
+    - POST /api/cas/expand      -> see _handle_cas_expand
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -1010,6 +1030,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == CAS_SIMPLIFY_PATH:
             _handle_cas_simplify(self)
+            return
+        if self.path == CAS_EXPAND_PATH:
+            _handle_cas_expand(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

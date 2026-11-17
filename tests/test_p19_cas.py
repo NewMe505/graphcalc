@@ -1,6 +1,7 @@
-"""Tests for plan step P19/S1: POST /api/cas/simplify.
+"""Tests for plan step P19/S1 (POST /api/cas/simplify) and P19/S2 (POST
+/api/cas/expand).
 
-F1 (PRODUCT.md, [failing] before this step): 'simplify "(x^2-1)/(x-1)"
+F1 (PRODUCT.md, [failing] before P19/S1): 'simplify "(x^2-1)/(x-1)"
 returns result "x + 1"'. test_cas_simplify_rational_cancellation proves
 exactly that, through the real POST /api/cas/simplify route (graphcalc.
 cli.Handler.do_POST) against an in-process server, reusing the same `_post`
@@ -8,16 +9,27 @@ HTTP helper and server-building pattern tests/test_p17_regression.py
 already uses. test_cas_simplify_unit_rational_cancellation proves the same
 thing directly against graphcalc.cas.simplify(), with no HTTP involved.
 
-The remaining tests cover this step's own spec: simplify renders a power
-with "^" (test_cas_simplify_power_notation, both via HTTP and the unit
-function), and the acceptance checklist's "a malformed expr returns 400"
-half (test_cas_simplify_400_malformed_expr, test_cas_simplify_400_missing_expr,
+The remaining simplify tests cover that step's own spec: simplify renders
+a power with "^" (test_cas_simplify_power_notation, both via HTTP and the
+unit function), and the acceptance checklist's "a malformed expr returns
+400" half (test_cas_simplify_400_malformed_expr, test_cas_simplify_400_missing_expr,
 test_cas_simplify_400_non_object_body) -- each a JSON 400 with an "error"
 key, never a 500, the same "never a 500" rule every other math-performing
 route already follows. test_cas_simplify_unit_malformed_expr_raises_calc_error
 proves the same malformed-expr case raises graphcalc.calc.CalcError
 directly from graphcalc.cas.simplify, which is what lets the HTTP handler
 turn it into a 400 in the first place.
+
+F2 (PRODUCT.md, [failing] before P19/S2): 'expand "(x+1)^2" returns result
+"x^2 + 2*x + 1"'. test_cas_expand_square_binomial proves exactly that
+through the real POST /api/cas/expand route; test_cas_expand_unit_square_binomial
+proves the same thing directly against graphcalc.cas.expand(). The
+remaining expand tests mirror the simplify ones above: the result uses
+"^" and never "**" (test_cas_expand_power_notation_no_double_star, both via
+HTTP and the unit function), the "a malformed expr returns 400" half
+(test_cas_expand_400_malformed_expr, test_cas_expand_400_missing_expr,
+test_cas_expand_400_non_object_body), and the unit-level CalcError
+(test_cas_expand_unit_malformed_expr_raises_calc_error).
 """
 
 import threading
@@ -103,3 +115,58 @@ def test_cas_simplify_400_non_object_body(base):
 def test_cas_simplify_unit_malformed_expr_raises_calc_error():
     with pytest.raises(CalcError):
         cas.simplify("x+")
+
+
+# ---- F2: expand "(x+1)^2" returns result "x^2 + 2*x + 1" ----
+
+
+def test_cas_expand_square_binomial(base):
+    status, body = _post(base, "/api/cas/expand", {"expr": "(x+1)^2"})
+    assert status == 200, body
+    assert body == {"result": "x^2 + 2*x + 1"}, body
+
+
+def test_cas_expand_unit_square_binomial():
+    assert cas.expand("(x+1)^2") == "x^2 + 2*x + 1"
+
+
+# ---- powers render with "^", never "**" ----
+
+
+def test_cas_expand_power_notation_no_double_star(base):
+    status, body = _post(base, "/api/cas/expand", {"expr": "(x+1)^2"})
+    assert status == 200, body
+    assert "^" in body["result"], body
+    assert "**" not in body["result"], body
+
+
+def test_cas_expand_unit_power_notation_no_double_star():
+    result = cas.expand("(x+1)^2")
+    assert "^" in result, result
+    assert "**" not in result, result
+
+
+# ---- "a malformed expr returns 400" ----
+
+
+def test_cas_expand_400_malformed_expr(base):
+    status, body = _post(base, "/api/cas/expand", {"expr": "x+"})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_cas_expand_400_missing_expr(base):
+    status, body = _post(base, "/api/cas/expand", {})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_cas_expand_400_non_object_body(base):
+    status, body = _post(base, "/api/cas/expand", ["not", "an", "object"])
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_cas_expand_unit_malformed_expr_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.expand("x+")

@@ -246,6 +246,32 @@
   including a missing one, is a 400 (`{"error": "unknown action: ..."}`),
   same as a bad factor/dx/dy/window. Never a 500. Added
   `graphcalc.graph.window` and `tests/test_p11_graph_window.py`.
+- `POST /api/graph/analyze` (P12/S1): `"value"` and `"zero"`, plus the
+  request validation shared by every operation (`"minimum"`, `"maximum"`
+  and `"intersection"` are validated here but not computed until a later
+  step). Body `{"operation": "value"|"zero"|"minimum"|"maximum"|
+  "intersection", "f", "g" (`"intersection"` only), "x" (`"value"` only),
+  "lower", "upper" (every other operation)}` answers 200 `{"operation",
+  "x", "y", "domain_error"}`, with `x`/`y` each a 12-significant-digit
+  decimal string (`graphcalc.numfmt.format_decimal`) or `null`. `"value"`
+  substitutes `x` into `f` (`"x^2+1"` at `x=3` -> `x "3"`, `y "10"`); a
+  gap (e.g. `"1/x"` at `x=0`) answers 200 with `y` `null` and a
+  `domain_error` instead, `x` still formatted. `"zero"` scans
+  `[lower, upper]` for a sign change or a near-zero sample, refines it by
+  bisection, and snaps the result to an exact value with sympy
+  `nsimplify` when one still solves the equation within tolerance
+  (`"x^2-4"` on `[0,5]` -> `x "2"`, `y "0"`); no root in the interval
+  answers 200 with `x`/`y` both `null` and `domain_error`
+  `"no zero in interval"` -- not a 400. `f` (and `g`) are parsed with
+  `graphcalc.calc.evaluate()`, same as `/api/graph/plot`, so
+  `graphcalc.calc.CalcError` escapes unchanged and is a 400 here too, not
+  just the new `graphcalc.graph.GraphError`. 400 also covers: an unknown
+  `operation`, a missing/non-string `f` (or `g`, for `"intersection"`), a
+  missing/non-numeric/non-finite `x` (`"value"`) or `lower`/`upper`
+  (every other operation), and `lower >= upper`. Never a 500. Added
+  `graphcalc.graph.analyze` (plus `GraphError`, `DOMAIN_ERROR_NO_ZERO`,
+  `DOMAIN_ERROR_NO_VALUE`, `ANALYZE_OPERATIONS`), `graphcalc.cli.
+  _handle_graph_analyze`, and `tests/test_p12_graph_analyze.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

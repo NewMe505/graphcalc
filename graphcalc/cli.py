@@ -39,6 +39,19 @@ _handle_graph_window, which defers to graphcalc.graph.window(). Also
 stateless: the client sends the window it already has (or none at all,
 for the default "standard" window) and gets the next one back; this
 server never remembers a "current" window across requests.
+
+POST /api/graph/analyze (plan step P12) lives next to both -- see
+_handle_graph_analyze, which defers to graphcalc.graph.analyze(). The
+request is {"operation": "value"|"zero"|"minimum"|"maximum"|
+"intersection", "f", "g" (intersection only), "x" (value only), "lower",
+"upper" (every other operation)}; the response is always {"operation",
+"x", "y", "domain_error"}, with "x"/"y" each a 12-significant-digit
+decimal string (graphcalc.numfmt.format_decimal) or None. "No zero or
+intersection" is not an error -- it is a 200 with "x"/"y" None and
+"domain_error" set (e.g. "no zero in interval"); a bad operation, a
+missing parameter, or lower >= upper is a 400, the same as a bad
+expression graphcalc.calc.evaluate itself rejects. Also stateless, like
+/api/graph/plot and /api/graph/window.
 """
 
 import argparse
@@ -59,6 +72,7 @@ CALC_VARS_PATH = "/api/calc/vars"
 STATE_RESET_PATH = "/api/state/reset"
 GRAPH_PLOT_PATH = "/api/graph/plot"
 GRAPH_WINDOW_PATH = "/api/graph/window"
+GRAPH_ANALYZE_PATH = "/api/graph/analyze"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -481,6 +495,48 @@ def _handle_graph_window(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_graph_analyze(handler):
+    """POST /api/graph/analyze: {"operation","f","g","x","lower","upper"} ->
+    graph.analyze's dict, 200 JSON (plan step P12/S1).
+
+    A malformed body, a non-object body, or a graphcalc.graph.GraphError
+    (a bad operation, a missing/wrong-type parameter, or lower >= upper)
+    is a JSON 400. graphcalc.calc.CalcError -- bad syntax, an unknown
+    function call, or an expression the freeze guard flags, all of which
+    graph.analyze() can raise unchanged, via graphcalc.graph._parse_function
+    reusing graphcalc.calc.evaluate -- is also a JSON 400 here, not just
+    GraphError (same dual-exception contract as _handle_graph_plot; see
+    graphcalc.graph's own module docstring). "No zero in interval" is not
+    one of these -- graph.analyze() answers that as a normal 200 with
+    "domain_error" set, so it is sent the same way as any other success.
+    The catch-all at the very end is this handler's own backstop for
+    anything else: this endpoint must never answer with a 500.
+
+    graphcalc.graph is imported lazily, the same reason graphcalc.calc is
+    imported lazily in _handle_calc_evaluate: every other route keeps
+    working even if sympy were ever unavailable.
+    """
+    from graphcalc import calc, graph
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = graph.analyze(payload)
+        except (graph.GraphError, calc.CalcError) as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -496,6 +552,7 @@ class Handler(BaseHTTPRequestHandler):
     - POST /api/state/reset     -> see _handle_state_reset
     - POST /api/graph/plot      -> see _handle_graph_plot
     - POST /api/graph/window    -> see _handle_graph_window
+    - POST /api/graph/analyze   -> see _handle_graph_analyze
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -529,6 +586,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == GRAPH_WINDOW_PATH:
             _handle_graph_window(self)
+            return
+        if self.path == GRAPH_ANALYZE_PATH:
+            _handle_graph_analyze(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

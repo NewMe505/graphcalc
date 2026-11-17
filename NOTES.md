@@ -8,6 +8,33 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P12/S1 (2026-11-17): `POST /api/graph/analyze`, "value" and "zero" only.
+  `graphcalc/graph.py`, `graphcalc/cli.py`, `tests/test_p12_graph_analyze.py`.
+  - `graph.py` already had `analyze()`, both ops, and all the validation
+    (unknown operation, missing `f`/`g`, missing `x` for "value", missing/
+    bad `lower`/`upper` for everything else, `lower >= upper`) by the time
+    this attempt started -- attempt 1 must have written it but never wired
+    `graphcalc/cli.py` up to call it, so `POST /api/graph/analyze` 404'd
+    and no test exercised any of it. This attempt only added the
+    `cli.py` side (`GRAPH_ANALYZE_PATH`, `_handle_graph_analyze` copying
+    `_handle_graph_plot`'s `(GraphError, CalcError) -> 400` pattern, the
+    `do_POST` branch, the route docstring line, a P12 module-docstring
+    paragraph) and `tests/test_p12_graph_analyze.py`.
+  - `tests/` not `graphcalc/tests/`: the plan's "Files expected" lists
+    `graphcalc/tests/test_p12_graph_analyze.py`, but no `graphcalc/tests/`
+    directory exists anywhere in this repo -- every other test file
+    (including P10's and P11's own graph tests) lives under the top-level
+    `tests/`. Put the new file there, next to `test_p11_graph_window.py`,
+    whose `server`/`base` fixtures and `_post` helper it copies verbatim.
+  - "minimum", "maximum" and "intersection" are validated (same `f`/`g`/
+    `lower`/`upper` rules) but raise `GraphError("operation not
+    implemented yet: ...")` -- a 400 -- when actually reached; a later
+    plan step replaces that with the real computation. No acceptance
+    criterion for this step exercises any of the three.
+  - Did not touch `tests/acceptance/test_acceptance.py` or `conftest.py`
+    (both listed in "Files expected"): neither already referenced P12 or
+    `/api/graph/analyze`, and this step's own instructions only called
+    for the new `tests/test_p12_graph_analyze.py` file. Left as-is.
 - P9 (2026-11-15): disk-persisted state. `graphcalc/state.py`,
   `graphcalc/history.py`, `graphcalc/cli.py`, `.gitignore`,
   `tests/test_p9_state_persistence.py`.

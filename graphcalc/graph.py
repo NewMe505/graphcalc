@@ -1,5 +1,5 @@
-"""Graphing core for POST /api/graph/plot and POST /api/graph/window
-(plan steps P10/S1 and P11/S1).
+"""Graphing core for POST /api/graph/plot, POST /api/graph/window and
+POST /api/graph/analyze (plan steps P10/S1, P11/S1 and P12/S1).
 
 plot(body) and window(body) are the only things graphcalc/cli.py calls
 from here; neither ever touches the network. plot() deliberately does
@@ -24,13 +24,24 @@ into the symbolic string "x + y" for a CAS-style query. This module adds
 that check itself, in _parse_function, after evaluate() returns: any free
 symbol other than "x" left in the simplified result is a GraphError, never
 silently plotted as if it were zero.
+
+analyze() (plan step P12/S1) reuses the same _parse_function and
+_evaluate_at this module already built for plot() -- "value" substitutes
+x directly; "zero" samples and bisects numerically, then snaps the result
+to an exact sympy value when nsimplify finds one that still solves the
+equation within tolerance. The two exception types propagate out of
+analyze() exactly like they do out of plot(): a GraphError for a bad
+request, or calc.CalcError unchanged from _parse_function. "minimum",
+"maximum" and "intersection" are only validated, not computed, by this
+plan step -- see analyze()'s own docstring.
 """
 
 import math
 
-from sympy import Float, Symbol, nan, oo, sympify, zoo
+from sympy import Float, Symbol, nan, nsimplify, oo, sympify, zoo
 
 from graphcalc.calc import evaluate
+from graphcalc.numfmt import format_decimal
 
 # Fixed, distinct colors for the four graphable slots (plan step P10's
 # planner notes: "Fixed distinct colors for f1-f4"). Picked from a standard
@@ -358,3 +369,277 @@ def plot(body):
         }
 
     return {"x": xs, "series": series}
+
+
+# POST /api/graph/analyze (plan step P12/S1).
+
+ANALYZE_OPERATIONS = ("value", "zero", "minimum", "maximum", "intersection")
+
+# "no zero or intersection: 200 with domain_error" (plan step P12's planner
+# notes): this exact wording is also the acceptance criterion's own text
+# for "zero of x^2+1 on [-5,5]". DOMAIN_ERROR_NO_VALUE is this module's own
+# choice for "value"'s analogous gap (e.g. "1/x" at x=0) -- not called out
+# by name in any acceptance criterion, but "a gap returns domain_error
+# instead of y" (the planner notes) still needs some message, not None.
+DOMAIN_ERROR_NO_ZERO = "no zero in interval"
+DOMAIN_ERROR_NO_VALUE = "no value at that point"
+
+# "scan [lower, upper] for sign changes or near-zero samples" (planner
+# notes): 400 evenly spaced samples is generous enough to catch a sign
+# change on any interval an acceptance criterion or a reasonable user would
+# type, while staying far short of plot()'s own MAX_SAMPLES -- this is a
+# fixed-cost scan a single request pays once, not something a client size
+# controls.
+_ZERO_SCAN_INTERVALS = 400
+# A sample within this of zero is treated as a root outright, before any
+# bisection -- catches a root that sits exactly on (or extremely near) a
+# scan point, including a double root such as "x^2" at x=0 that never
+# actually changes sign.
+_ZERO_NEAR_ZERO_TOLERANCE = 1e-7
+# After bisection (or a near-zero sample, or an nsimplify snap), the
+# candidate root is only accepted when |f(candidate)| is within this of
+# zero -- the guard that turns a sign change straddling a pole (e.g. "1/x"
+# on [-1,1], which crosses from negative to positive *through* an
+# undefined point, never an actual zero) back into "no zero found", since
+# the function's value near a pole is huge, never small.
+_ZERO_RESIDUAL_TOLERANCE = 1e-6
+# 100 bisections on even the widest realistic [lower, upper] interval
+# narrows the bracket far past double-precision float resolution; the
+# early-exit below (bracket width under 1e-13) means this count is a safe
+# ceiling, not something every call actually spends in full.
+_BISECTION_ITERATIONS = 100
+
+
+def _require_expr(body, key):
+    """Return body[key] as a non-empty-type-checked string, or raise
+    GraphError.
+
+    Shared by analyze()'s "f" (always required) and "g" (required only
+    for "intersection"). Both are only ever handed to _parse_function next,
+    which goes through graphcalc.calc.evaluate -- a non-string value (None
+    because the key is missing entirely, or the wrong JSON type, e.g.
+    {"f": 5}) must never reach that call at all: evaluate() would instead
+    raise its own, differently-worded CalcError ("missing parameter:
+    expr"), the same distinction plot()'s own per-slot string check draws
+    (see this module's own plot(), and its docstring).
+    """
+    value = body.get(key)
+    if value is None:
+        raise GraphError(f"missing parameter: {key}")
+    if not isinstance(value, str):
+        raise GraphError(f"{key} must be a string")
+    return value
+
+
+def _bisect_root(parsed, lower, upper, f_lower, f_upper):
+    """Narrow [lower, upper] -- a bracket already known to straddle a sign
+    change, with f_lower/f_upper the (nonzero) samples at each end -- to a
+    single root by bisection, then return it as a plain float, or None.
+
+    None covers two cases, both deliberate: a midpoint sample that is
+    itself a gap (_evaluate_at returns None, e.g. the bracket straddles
+    "1/x"'s pole at x=0 exactly) stops the bisection immediately rather
+    than bisecting around a hole it cannot evaluate through; and a
+    bracket that does converge, but to a point where |f| is not actually
+    within _ZERO_RESIDUAL_TOLERANCE of zero (the pole case the module
+    constant's own docstring describes, when the midpoint samples happen
+    to land off the exact pole), is rejected by the residual check at the
+    end rather than reported as a false root.
+    """
+    for _ in range(_BISECTION_ITERATIONS):
+        mid = (lower + upper) / 2.0
+        f_mid = _evaluate_at(parsed, mid)
+        if f_mid is None:
+            return None
+        if f_mid == 0:
+            lower = upper = mid
+            break
+        if (f_mid < 0) == (f_lower < 0):
+            lower, f_lower = mid, f_mid
+        else:
+            upper, f_upper = mid, f_mid
+        if upper - lower < 1e-13:
+            break
+    root = (lower + upper) / 2.0
+    residual = _evaluate_at(parsed, root)
+    if residual is None or abs(residual) > _ZERO_RESIDUAL_TOLERANCE:
+        return None
+    return root
+
+
+def _scan_for_root(parsed, lower, upper):
+    """Return a root of `parsed` in [lower, upper] as a plain float, or
+    None when the scan finds none.
+
+    `_ZERO_SCAN_INTERVALS` evenly spaced samples (including both ends) are
+    taken first. Any sample within `_ZERO_NEAR_ZERO_TOLERANCE` of zero is
+    returned immediately, leftmost first -- this is what catches a double
+    root (e.g. "x^2" at x=0) that a sign-change scan alone would miss
+    entirely, since the function never actually goes negative. Only when
+    no sample itself reads as a root does this fall back to scanning
+    consecutive sample pairs for an actual sign change (skipping any pair
+    with a gap sample), bisecting the first one found with _bisect_root.
+    A sign change can still fail to yield a root (see _bisect_root's own
+    docstring, the pole case); the scan then keeps looking at the next
+    pair rather than stopping there.
+    """
+    step = (upper - lower) / _ZERO_SCAN_INTERVALS
+    xs = [lower + index * step for index in range(_ZERO_SCAN_INTERVALS + 1)]
+    xs[-1] = upper
+    ys = [_evaluate_at(parsed, value) for value in xs]
+
+    for x_value, y_value in zip(xs, ys):
+        if y_value is not None and abs(y_value) <= _ZERO_NEAR_ZERO_TOLERANCE:
+            return x_value
+
+    for index in range(len(xs) - 1):
+        f_lower, f_upper = ys[index], ys[index + 1]
+        if f_lower is None or f_upper is None:
+            continue
+        if (f_lower < 0) != (f_upper < 0):
+            root = _bisect_root(parsed, xs[index], xs[index + 1], f_lower, f_upper)
+            if root is not None:
+                return root
+    return None
+
+
+def _snap_root(parsed, root):
+    """Try to replace a numeric `root` (a plain float) with a simpler exact
+    sympy value (e.g. sqrt(2), or the Integer 2), or return None.
+
+    sympy's nsimplify(Float(root), rational=False) is what the planner
+    notes mean by "snap the root to an exact value" -- it looks for a
+    simple closed form (an integer, a small rational, a recognizable
+    constant or radical) close to the float. "rational=False" lets it
+    recognize a form like sqrt(2) rather than only ever rounding to the
+    nearest fraction. The snap is only ever used when the snapped value,
+    substituted back into `parsed`, still gives |f| within
+    _ZERO_RESIDUAL_TOLERANCE of zero -- nsimplify can propose a value close
+    to the float that does not actually solve the equation, and that must
+    never corrupt an otherwise-good numeric root. Any failure along the
+    way (nsimplify itself, the substitution, or a non-finite/non-real
+    residual) is also treated as "no snap available", not an error --
+    analyze() falls back to the plain float root instead.
+    """
+    try:
+        snapped = nsimplify(Float(root), rational=False)
+    except Exception:
+        return None
+    try:
+        residual = float(parsed.subs(_X, snapped).evalf())
+    except (TypeError, ValueError, OverflowError):
+        return None
+    if not math.isfinite(residual) or abs(residual) > _ZERO_RESIDUAL_TOLERANCE:
+        return None
+    return snapped
+
+
+def analyze(body):
+    """Build the POST /api/graph/analyze response dict for `body` (plan
+    step P12/S1).
+
+    `body` is {"operation": "value"|"zero"|"minimum"|"maximum"|
+    "intersection", "f": expr, "g": expr (intersection only), "x" (value
+    only), "lower", "upper" (every other operation)}. Returns
+    {"operation", "x", "y", "domain_error"}, with "x"/"y" each a
+    numfmt.format_decimal string (12 significant digits) or None, and
+    "domain_error" a message or None.
+
+    Validates, in order, before anything is parsed:
+    - "operation" must be one of ANALYZE_OPERATIONS, else GraphError
+      ("bad operation ... 400", planner notes).
+    - "f" is always required, as a string (_require_expr) -- "missing
+      parameter ... 400".
+    - "g" is required (also via _require_expr) only when "operation" is
+      "intersection".
+    - "x" is required, as a finite non-bool number (_finite_number), only
+      for "value".
+    - "lower" and "upper" are required, each a finite non-bool number, for
+      every other operation, with lower < upper (same rule, and same
+      GraphError wording, as window()'s own xmin < xmax) -- "lower >=
+      upper ... 400".
+
+    "f" (and "g", for "intersection") is then parsed with _parse_function,
+    the same evaluator-backed parse plot() uses -- so graphcalc.calc.
+    CalcError (bad syntax, an unknown function call, or an expression the
+    freeze guard flags) can also escape analyze() unchanged, exactly as it
+    can escape plot(); graphcalc.cli must treat both exception types as a
+    400 here too.
+
+    "value" substitutes "x" into "f" with _evaluate_at; a gap (division by
+    zero, a non-real result, and so on) answers 200 with "y" None and
+    "domain_error" DOMAIN_ERROR_NO_VALUE, "x" still the formatted input --
+    "a gap returns domain_error instead of y" (planner notes): only "y" is
+    replaced.
+
+    "zero" scans [lower, upper] for a root with _scan_for_root, refines it
+    by bisection, and snaps it to an exact value with _snap_root when one
+    is found. No root in the interval is not a GraphError -- it answers
+    200 with "x" and "y" both None and "domain_error" DOMAIN_ERROR_NO_ZERO
+    ("No zero or intersection: 200 with domain_error", planner notes). A
+    root's own "y" is always "0" (numfmt.format_decimal(0)): by
+    construction a root's y-value is zero, so there is no reason to format
+    whatever float residual bisection's own last sample happened to leave,
+    which can carry meaningless floating-point noise.
+
+    "minimum", "maximum" and "intersection" are validated above (same
+    "f"/"g"/"lower"/"upper" rules) but not computed by this plan step --
+    a later plan step replaces this GraphError with the actual
+    computation; no acceptance criterion for this plan step reaches it.
+    """
+    if not isinstance(body, dict):
+        raise GraphError("invalid request body")
+
+    operation = body.get("operation")
+    if operation not in ANALYZE_OPERATIONS:
+        raise GraphError(f"unknown operation: {operation!r}")
+
+    f_text = _require_expr(body, "f")
+    if operation == "intersection":
+        _require_expr(body, "g")
+
+    if operation == "value":
+        x_value = _finite_number(body, "x", "x")
+    else:
+        lower = _finite_number(body, "lower", "lower")
+        upper = _finite_number(body, "upper", "upper")
+        if lower >= upper:
+            raise GraphError("lower must be less than upper")
+
+    if operation == "value":
+        parsed_f = _parse_function(f_text)
+        y_value = _evaluate_at(parsed_f, x_value)
+        if y_value is None:
+            return {
+                "operation": operation,
+                "x": format_decimal(x_value, sig=12),
+                "y": None,
+                "domain_error": DOMAIN_ERROR_NO_VALUE,
+            }
+        return {
+            "operation": operation,
+            "x": format_decimal(x_value, sig=12),
+            "y": format_decimal(y_value, sig=12),
+            "domain_error": None,
+        }
+
+    if operation == "zero":
+        parsed_f = _parse_function(f_text)
+        root = _scan_for_root(parsed_f, lower, upper)
+        if root is None:
+            return {
+                "operation": operation,
+                "x": None,
+                "y": None,
+                "domain_error": DOMAIN_ERROR_NO_ZERO,
+            }
+        snapped = _snap_root(parsed_f, root)
+        x_display = snapped if snapped is not None else root
+        return {
+            "operation": operation,
+            "x": format_decimal(x_display, sig=12),
+            "y": format_decimal(0, sig=12),
+            "domain_error": None,
+        }
+
+    raise GraphError(f"operation not implemented yet: {operation!r}")

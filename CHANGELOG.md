@@ -223,6 +223,29 @@
   server's stored variables, functions, `ans`, or history. Added
   `graphcalc/graph.py` (`plot`, `GraphError`, `SERIES_COLORS`,
   `MIN_SAMPLES`/`MAX_SAMPLES`) and `tests/test_p10_graph_plot.py`.
+- `POST /api/graph/window` (P11): turns one window into the next, also
+  stateless -- the server never remembers a "current" window across
+  requests. Body `{"action": "zoom_in" | "zoom_out" | "pan" | "standard",
+  "factor", "dx", "dy", "window"}` answers 200 `{"xmin","xmax","ymin",
+  "ymax"}` as plain numbers (an int when the result is a whole number, a
+  float otherwise, e.g. zooming `-10..10` in by factor 2 answers `-5`, not
+  `-5.0`). `"standard"` ignores every other key and always answers the
+  fixed `-10..10` window on both axes. Every other action defaults
+  `"window"` (absent or `null`) to that same standard `-10..10` window,
+  otherwise `"window"` must be an object with finite, non-bool `xmin`/
+  `xmax`/`ymin`/`ymax` and `xmin < xmax`/`ymin < ymax`, the same rules
+  `/api/graph/plot` enforces on its own window. `"zoom_in"`/`"zoom_out"`
+  need a finite, non-bool, strictly positive `"factor"`, and zoom about the
+  window's own center: factor 2 halves (`zoom_in`, `-10..10` -> `-5..5`) or
+  doubles (`zoom_out`, `-10..10` -> `-20..20`) each axis's half-span,
+  recentered on the unchanged midpoint. `"pan"` needs finite, non-bool
+  `"dx"`/`"dy"`, added straight onto `xmin`/`xmax` (`dx`) and `ymin`/`ymax`
+  (`dy`) -- a pure translation, so the window's width and height are
+  unchanged (`{"action":"pan","dx":1,"dy":-2}` on the standard window ->
+  `{"xmin":-9,"xmax":11,"ymin":-12,"ymax":8}`). Any other `"action"`,
+  including a missing one, is a 400 (`{"error": "unknown action: ..."}`),
+  same as a bad factor/dx/dy/window. Never a 500. Added
+  `graphcalc.graph.window` and `tests/test_p11_graph_window.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

@@ -286,6 +286,43 @@ curl -s -X POST http://127.0.0.1:8000/api/graph/plot \
 # {"error": "unknown function slot: 'f5'"}
 ```
 
+`POST /api/graph/window` turns one window into the next one, stateless --
+the server never remembers a "current" window across requests, so the
+client sends the window it already has (or none at all) and gets the next
+one back. Body `{"action": "zoom_in" | "zoom_out" | "pan" | "standard",
+"factor", "dx", "dy", "window"}`. `"standard"` ignores every other key and
+always answers the fixed `-10..10` window on both axes. Every other action
+defaults `"window"` (when absent or `null`) to that same standard `-10..10`
+window, otherwise `"window"` must be an object with finite, non-bool
+`xmin`/`xmax`/`ymin`/`ymax` (same rules as `/api/graph/plot`'s own window,
+including rejecting `xmin >= xmax` or `ymin >= ymax`). `"zoom_in"`/
+`"zoom_out"` need a finite, non-bool, strictly positive `"factor"`, and zoom
+about the window's own center: factor 2 halves (`zoom_in`) or doubles
+(`zoom_out`) each axis's half-span. `"pan"` needs finite, non-bool `"dx"`
+and `"dy"`, added straight onto `xmin`/`xmax` (`dx`) and `ymin`/`ymax`
+(`dy`) -- a pure translation, so the window's width and height are
+unchanged. Answers 200 with `{"xmin","xmax","ymin","ymax"}` as plain
+numbers -- an int when the result is a whole number, a float otherwise
+(e.g. zooming `-10..10` in by factor 2 answers `-5`, not `-5.0`). A 400
+(`{"error": <message>}`) covers any other `"action"` value, including a
+missing one, and the same bad-number rules as above. Never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/graph/window \
+  -H "Content-Type: application/json" \
+  -d '{"action": "zoom_in", "factor": 2, "window": {"xmin": -10, "xmax": 10, "ymin": -10, "ymax": 10}}'
+# {"xmin": -5, "xmax": 5, "ymin": -5, "ymax": 5}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/window \
+  -H "Content-Type: application/json" \
+  -d '{"action": "pan", "dx": 1, "dy": -2}'
+# {"xmin": -9, "xmax": 11, "ymin": -12, "ymax": 8} -- window defaults to standard -10..10
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/window \
+  -H "Content-Type: application/json" -d '{"action": "sideways"}'
+# {"error": "unknown action: 'sideways'"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and

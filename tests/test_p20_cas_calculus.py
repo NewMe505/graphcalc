@@ -1,4 +1,5 @@
-"""Tests for plan step P20/S1 (POST /api/cas/derivative).
+"""Tests for plan step P20/S1 (POST /api/cas/derivative) and P20/S2
+(POST /api/cas/integral).
 
 F1 (PRODUCT.md, [failing] before P20/S1): 'derivative of "x*sin(x)" by x
 returns "x*cos(x) + sin(x)"'. test_p20_derivative_product_rule proves
@@ -27,6 +28,28 @@ operation) turns a would-hang "expr" such as "x*9^9^9" into a quick JSON
 400 instead of ever letting sympy's own parse_expr try to materialize an
 astronomically large integer -- the "guard against hangs, as in P28"
 planner note for this plan step.
+
+F2 (PRODUCT.md, [failing] before P20/S2): 'integral of "x^2" by x returns
+"x^3/3"; with lower 0 and upper 1 it returns "1/3"'.
+test_p20_integral_indefinite_power_rule and
+test_p20_integral_definite_power_rule prove exactly that through the real
+POST /api/cas/integral route; test_p20_integral_unit_indefinite_power_rule
+and test_p20_integral_unit_definite_power_rule prove the same two things
+directly against graphcalc.cas.integral(), with no HTTP involved. This
+plan step's own spec only teaches _parse_bound to accept a JSON int/float
+for "lower"/"upper" -- an expression string such as "pi" is a later step,
+not proven here.
+
+test_p20_integral_400_only_one_bound and
+test_p20_integral_unit_only_one_bound_raises_calc_error prove supplying
+exactly one of "lower"/"upper" is a JSON 400 (graphcalc.cas.integral
+raises CalcError, never silently treating the missing one as anything).
+test_p20_integral_400_bool_bound and test_p20_integral_400_object_bound
+prove a bool or a JSON object "lower"/"upper" is also a JSON 400 (bool is
+explicitly rejected even though Python's bool is an int subclass);
+test_p20_integral_unit_bool_bound_raises_calc_error and
+test_p20_integral_unit_object_bound_raises_calc_error prove the same two
+cases directly raise CalcError from graphcalc.cas.integral.
 """
 
 import pytest
@@ -114,3 +137,71 @@ def test_p20_derivative_400_huge_power_expr(base):
     status, body = _post(base, "/api/cas/derivative", {"expr": "x*9^9^9", "var": "x"})
     assert status == 400, body
     assert "error" in body, body
+
+
+# ---- F2: integral of "x^2" by x returns "x^3/3"; lower 0, upper 1 returns "1/3" ----
+
+
+def test_p20_integral_indefinite_power_rule(base):
+    status, body = _post(base, "/api/cas/integral", {"expr": "x^2", "var": "x"})
+    assert status == 200, body
+    assert body == {"result": "x^3/3"}, body
+
+
+def test_p20_integral_unit_indefinite_power_rule():
+    assert cas.integral("x^2", "x") == "x^3/3"
+
+
+def test_p20_integral_definite_power_rule(base):
+    status, body = _post(
+        base, "/api/cas/integral", {"expr": "x^2", "var": "x", "lower": 0, "upper": 1}
+    )
+    assert status == 200, body
+    assert body == {"result": "1/3"}, body
+
+
+def test_p20_integral_unit_definite_power_rule():
+    assert cas.integral("x^2", "x", 0, 1) == "1/3"
+
+
+# ---- supplying exactly one of "lower"/"upper" is a JSON 400 ----
+
+
+def test_p20_integral_400_only_one_bound(base):
+    status, body = _post(base, "/api/cas/integral", {"expr": "x^2", "var": "x", "lower": 0})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_integral_unit_only_one_bound_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.integral("x^2", "x", lower=0)
+
+
+# ---- a bool or object "lower"/"upper" is a JSON 400 ----
+
+
+def test_p20_integral_400_bool_bound(base):
+    status, body = _post(
+        base, "/api/cas/integral", {"expr": "x^2", "var": "x", "lower": True, "upper": 1}
+    )
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_integral_unit_bool_bound_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.integral("x^2", "x", True, 1)
+
+
+def test_p20_integral_400_object_bound(base):
+    status, body = _post(
+        base, "/api/cas/integral", {"expr": "x^2", "var": "x", "lower": {}, "upper": 1}
+    )
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_integral_unit_object_bound_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.integral("x^2", "x", {}, 1)

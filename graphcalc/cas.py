@@ -1,12 +1,13 @@
-"""CAS algebra core for POST /api/cas/simplify, /expand, /factor and
-/derivative.
+"""CAS algebra core for POST /api/cas/simplify, /expand, /factor,
+/derivative and /integral.
 
 Plan step P19/S1 implemented simplify(expr); plan step P19/S2 added
 expand(expr) next to it in this same module; plan step P19/S3 added
 factor(expr) to complete that set. Plan step P20/S1 adds derivative(expr,
-var) next to them. simplify(), expand(), factor() and derivative() are the
-only things graphcalc/cli.py calls from here; neither they nor _parse ever
-touches the network.
+var) next to them. Plan step P20/S2 adds integral(expr, var, lower=None,
+upper=None). simplify(), expand(), factor(), derivative() and integral()
+are the only things graphcalc/cli.py calls from here; neither they nor
+_parse ever touches the network.
 
 _parse(expr) turns `expr` into a sympy expression and is deliberately built
 the same way graphcalc.calc.evaluate() parses its own input (plan steps
@@ -64,12 +65,31 @@ call, or anything parse_expr itself rejects -- all raise graphcalc.calc.
 CalcError, never any other exception, so graphcalc/cli.py's handlers can
 catch exactly that one type and turn it into the usual JSON 400, the same
 "never a 500" rule every other math-performing route already follows.
+
+_parse_bound(value, name) (plan step P20/S2) turns a POST body's "lower"/
+"upper" value into an exact sympy object for integral()'s definite-integral
+form. In this step it only accepts a JSON number: bool is rejected even
+though Python's bool is an int subclass (True/False are not valid bounds),
+and a float NaN or infinity is rejected the same way a non-finite "start"/
+"step" is rejected elsewhere in this codebase (graphcalc.graph.table).
+A plain int becomes an exact sympy.Integer; a float is handed to sympy.
+nsimplify(..., rational=True) so e.g. 0.5 comes back as the exact Rational
+1/2 instead of the ugly binary fraction float(0.5) actually is -- "the
+results stay exact" the same way every other CAS operation's result is
+exact. Any other type (str, list, dict, None, ...) raises CalcError; a
+later plan step teaches this helper to also accept an expression string
+such as "pi" or "oo" for /integral's bounds and /limit's point.
 """
 
-from sympy import Symbol
+import math
+
+from sympy import Integer, Symbol
+from sympy import Integral as _sympy_Integral
 from sympy import diff as _sympy_diff
 from sympy import expand as _sympy_expand
 from sympy import factor as _sympy_factor
+from sympy import integrate as _sympy_integrate
+from sympy import nsimplify
 from sympy import simplify as _sympy_simplify
 from sympy.parsing.sympy_parser import parse_expr
 
@@ -177,3 +197,61 @@ def derivative(expr: str, var: str) -> str:
         raise
     except Exception as exc:
         raise CalcError(f"invalid expression: {expr}") from exc
+
+
+def _parse_bound(value, name: str):
+    """Turn a POST body's `value` for "lower"/"upper" (or, later, "point")
+    into an exact sympy object, raising CalcError on failure (plan step
+    P20/S2). See this module's own docstring for the full rule; in this
+    step only a JSON int or float is accepted -- bool and non-finite float
+    (NaN, +-inf) are rejected, and any other type raises CalcError naming
+    `name` (e.g. "lower", "upper") so the caller's error message says which
+    parameter was bad.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise CalcError(f"invalid {name}: {value!r}")
+    if isinstance(value, float):
+        if math.isnan(value) or math.isinf(value):
+            raise CalcError(f"invalid {name}: {value!r}")
+        return nsimplify(value, rational=True)
+    return Integer(value)
+
+
+def integral(expr: str, var: str, lower=None, upper=None) -> str:
+    """Parse `expr`, run sympy.integrate() on it with respect to `var`, and
+    return the "^"-notation text of the result (plan step P20/S2).
+
+    With neither `lower` nor `upper` given, returns the indefinite
+    integral: integral("x^2", "x") -> "x^3/3". With both given, returns
+    the definite integral: integral("x^2", "x", 0, 1) -> "1/3". Supplying
+    exactly one of `lower`/`upper` raises CalcError -- a definite integral
+    needs both ends or neither. Each bound is parsed by _parse_bound (see
+    its own docstring for what it currently accepts). `var` must be a
+    plain ASCII identifier string, the same rule derivative() already
+    applies, checked before `expr` is even parsed. If sympy cannot find a
+    closed form -- it would hand back an unevaluated sympy.Integral instead
+    of a value -- this raises CalcError("no closed form") rather than
+    echoing the input back as if it were an answer. A malformed `expr`, or
+    any other sympy failure, also raises CalcError, never any other
+    exception.
+    """
+    if not isinstance(var, str) or not var.isascii() or not var.isidentifier():
+        raise CalcError(f"invalid variable: {var!r}")
+    if (lower is None) != (upper is None):
+        raise CalcError("integral needs both lower and upper, or neither")
+    parsed = _parse(expr)
+    symbol = Symbol(var)
+    try:
+        if lower is None:
+            result = _sympy_integrate(parsed, symbol)
+        else:
+            lo = _parse_bound(lower, "lower")
+            hi = _parse_bound(upper, "upper")
+            result = _sympy_integrate(parsed, (symbol, lo, hi))
+    except CalcError:
+        raise
+    except Exception as exc:
+        raise CalcError(f"invalid expression: {expr}") from exc
+    if result.has(_sympy_Integral):
+        raise CalcError("no closed form")
+    return to_text(result)

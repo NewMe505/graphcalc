@@ -400,6 +400,41 @@
   distinct x values for the model (fewer than 2 for `"linear"`, fewer than
   3 for `"quadratic"`), or every `y` value equal (`r2` undefined) each
   answer 400, never a 500. Added `tests/test_p17_regression.py`.
+- Lists & Statistics tab UI (P18): `GET /` now ships a working Lists &
+  Statistics tab, not just the static shell. `graphcalc/static/index.html`
+  gains nine new ids inside `tab-lists`: `list-grid`, `stats-list`,
+  `stats-output`, `regression-model` (a `<select>` defaulting to
+  `"linear"`, with `"quadratic"` as the other option), `regression-x`,
+  `regression-y`, `regression-run`, `regression-output`, and a new
+  600x400 `stats-canvas` `<canvas>`. `graphcalc/static/app.js` wires all
+  three endpoints: `loadLists()` runs on page load and on every click of
+  the Lists & Statistics tab button, fetching `GET /api/lists` then one
+  `GET /api/lists/<name>` per name in parallel to fill `list-grid` (each
+  list's own heading plus its values) and the `stats-list`/`regression-x`/
+  `regression-y` selects, keeping a still-valid prior selection; a
+  `change` on `stats-list` POSTs `{"list": name}` to `/api/stats/onevar`
+  and renders every returned key as a `<dt>`/`<dd>` pair in `stats-output`
+  (an `{"exact","decimal"}` pair collapses to just `exact` when the two
+  match, e.g. `mean` shows `3`, not `3 = 3`); `regression-run` POSTs
+  `regression-model`'s value plus the chosen `regression-x`/`regression-y`
+  lists' own *values* (not their names) to `/api/stats/regression` and
+  renders `model`/each coefficient/`r2` as `"key = value"` lines in
+  `regression-output` (e.g. `a = 2`, `b = 0`), then draws the response's
+  `points` (dots) and `curve` (one connected line) on `stats-canvas`, with
+  the drawing window fit client-side to their combined min/max plus a 10%
+  margin. A 400 from either `/api/stats/onevar` or `/api/stats/regression`
+  shows its `error` message in the matching output element instead. The
+  Calculator and Graphs tabs' own ids and wiring are unchanged. Added
+  `tests/test_p18_lists_ui.py` (both static-content acceptance criteria:
+  the nine required ids, with `stats-canvas` confirmed as an actual
+  `<canvas>`, and `GET /static/app.js` mentioning all three
+  `/api/lists`/`/api/stats/*` paths) and `tests/test_p18_lists_browser.py`
+  (real-Chromium, Playwright-driven: F3 -- `L1 [1,2,3,4,5]` appears in
+  `list-grid` and choosing it in `stats-list` shows `n 5`/`mean 3` in
+  `stats-output` -- and F4 -- a linear regression of `L2 [2,4,6]` on
+  `L1 [1,2,3]` shows `a = 2`/`b = 0` in `regression-output` and leaves at
+  least one non-blank pixel on `stats-canvas`; skips, never fails, without
+  Playwright/Chromium).
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

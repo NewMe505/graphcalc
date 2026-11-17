@@ -45,7 +45,8 @@ curl -s -X POST http://127.0.0.1:8000/api/state/reset
 
 The UI shell is served from two routes:
 - `GET /` -- `text/html`, the tab page (`tab-calculator`, `tab-graphs`,
-  `tab-lists`, `tab-cas`, and a `graph-canvas` canvas on the Graphs tab).
+  `tab-lists`, `tab-cas`, a `graph-canvas` canvas on the Graphs tab, and a
+  `stats-canvas` canvas on the Lists & Statistics tab).
 - `GET /static/<name>` -- the page's own `.js`/`.css`/`.html` files with an
   explicit content type (e.g. `application/javascript`, `text/css`). Any
   other path, including a traversal attempt, answers a JSON 404, never a 500.
@@ -486,6 +487,34 @@ paths; every plotted point, window, analysis result and table cell the
 Graphs tab shows comes from one of these four endpoints, never computed in
 the browser.
 
+The Lists & Statistics tab (`tab-lists`) is wired to `/api/lists`,
+`/api/stats/onevar` and `/api/stats/regression`, not just the static
+`list-grid`/`stats-canvas` shell. `loadLists()` runs once on page load and
+again every time the Lists & Statistics tab button is clicked: it calls
+`GET /api/lists` for the stored names, then one `GET /api/lists/<name>` per
+name in parallel, and renders each list's own values into `#list-grid` (one
+heading plus its values) while filling `#stats-list`, `#regression-x` and
+`#regression-y` with those same names, keeping whichever name was already
+selected in each if it still exists. Changing `#stats-list` POSTs
+`{"list": name}` to `/api/stats/onevar` and renders every returned key as a
+`<dt>`/`<dd>` pair into `#stats-output`; an `{"exact","decimal"}` pair (e.g.
+`mean`, `sx`) shows as `exact` alone when the two match, or `exact =
+decimal` when they differ, so `L1 [1,2,3,4,5]`'s `mean` shows plainly as
+`3`. A 400 (e.g. an empty list) shows its `error` message in `#stats-output`
+instead. `#regression-run` POSTs `#regression-model`'s value plus the
+*values* (not the names) of whichever lists are chosen in
+`#regression-x`/`#regression-y` to `/api/stats/regression`, and renders the
+response's `model`, each coefficient, and `r2` as `"key = value"` lines in
+`#regression-output` (e.g. `a = 2`, `b = 0`) -- or its `error` message on a
+400, or `"choose an x list and a y list"` if either select is still empty.
+A successful regression also draws on `#stats-canvas`: the response's own
+`points` (dots) and `curve` (one connected line) are mapped into a window
+fit client-side to their combined min/max with a 10% margin, never a window
+computed by the server. All of it lives in `graphcalc/static/app.js`, same
+plain `fetch()` on relative paths as the Calculator and Graphs tabs; every
+list value, statistic, coefficient and plotted point the tab shows comes
+from one of those three endpoints, never computed in the browser.
+
 A long result, value or error never widens the page: `graphcalc/static/
 style.css` sets `overflow-wrap: anywhere` (plus `word-break: break-word` for
 older browsers) on `body`, inherited by every tab panel, so an unbroken run
@@ -495,8 +524,9 @@ same value stored by `"a:=10^1000"` in `#calc-vars`, a function body such as
 `#calc-error`, or a long value/error in the Graphs tab's `#graph-table`
 cells or its analyze/error status line -- wraps inside its own block instead
 of scrolling the whole page sideways. The rule lives on `body`, not on any
-one tab's elements, so the Lists & Statistics and CAS tabs get the same
-protection for any long text they render later.
+one tab's elements, so the Lists & Statistics tab's own `#list-grid`/
+`#stats-output`/`#regression-output` text already inherits the same
+protection, and the CAS tab will too once it renders anything.
 
 ## Develop
 

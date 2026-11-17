@@ -905,4 +905,121 @@
       listsTabButton.addEventListener("click", loadLists);
     }
   }
+
+  // ---- CAS tab: wired to /api/cas/simplify, /expand, /factor, /derivative,
+  // /integral, /limit and /solve (plan step P22/S2). Same as the
+  // Calculator, Graphs and Lists & Statistics tabs above, the page only
+  // draws what the API returns -- no client-side math, ever.
+  var CAS_SIMPLIFY_PATH = "/api/cas/simplify";
+  var CAS_EXPAND_PATH = "/api/cas/expand";
+  var CAS_FACTOR_PATH = "/api/cas/factor";
+  var CAS_DERIVATIVE_PATH = "/api/cas/derivative";
+  var CAS_INTEGRAL_PATH = "/api/cas/integral";
+  var CAS_LIMIT_PATH = "/api/cas/limit";
+  var CAS_SOLVE_PATH = "/api/cas/solve";
+
+  var casInput = document.getElementById("cas-input");
+  var casVar = document.getElementById("cas-var");
+  var casOp = document.getElementById("cas-op");
+  var casSubmit = document.getElementById("cas-submit");
+  var casOutput = document.getElementById("cas-output");
+
+  if (casSubmit) {
+    // Maps cas-op's own <option> values to each op's endpoint path.
+    var CAS_OP_PATHS = {
+      simplify: CAS_SIMPLIFY_PATH,
+      expand: CAS_EXPAND_PATH,
+      factor: CAS_FACTOR_PATH,
+      derivative: CAS_DERIVATIVE_PATH,
+      integral: CAS_INTEGRAL_PATH,
+      limit: CAS_LIMIT_PATH,
+      solve: CAS_SOLVE_PATH,
+    };
+
+    function casShowOutput(message) {
+      casOutput.textContent = message || "";
+    }
+
+    // Error path (plan step P22/S3): cas-output gets an "error" class so a
+    // 400's message is visually distinguishable from a plain result, same
+    // textContent-based rendering either way so P33's wrap rule still
+    // applies. Always paired with casClearOutput() at the start of the next
+    // submit, so an error never lingers once a later submit's result (or a
+    // later error) is ready to replace it.
+    function casShowError(message) {
+      casOutput.textContent = message;
+      casOutput.classList.add("error");
+    }
+
+    function casClearOutput() {
+      casOutput.textContent = "";
+      casOutput.classList.remove("error");
+    }
+
+    // Builds the right POST body for the chosen op: {"expr"} for
+    // simplify/expand/factor, {"expr","var"} for derivative/integral/limit,
+    // and {"equation","var"} for solve -- the field names confirmed against
+    // graphcalc/cli.py's own _handle_cas_* handlers (cli.py:899-1170).
+    function casBuildPayload(op) {
+      if (op === "solve") {
+        return { equation: casInput.value, var: casVar.value };
+      }
+      if (op === "derivative" || op === "integral" || op === "limit") {
+        return { expr: casInput.value, var: casVar.value };
+      }
+      return { expr: casInput.value };
+    }
+
+    // Reads cas-op, POSTs the matching payload to that op's own endpoint,
+    // and writes the response's "result" (or, for solve, its "solutions"
+    // list joined by ", ") into cas-output -- or, on a 400, "Error: " plus
+    // that response's own "error" message, with an "error" class so it
+    // reads as a failure, not a result (plan step P22/S3). cas-output is
+    // cleared (text and "error" class both) at the very start of every
+    // submit, so the previous submit's result or error never lingers once a
+    // new one is in flight, and the next submit's own outcome -- success or
+    // failure -- always fully replaces it (the same "last submit wins" rule
+    // every other tab's own status/error element already follows).
+    function casSubmitExpression() {
+      var op = casOp.value;
+      var path = CAS_OP_PATHS[op];
+      casClearOutput();
+      fetch(path, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(casBuildPayload(op)),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            casShowError("Error: " + (result.data.error || "error"));
+            return;
+          }
+          if (op === "solve") {
+            casShowOutput((result.data.solutions || []).join(", "));
+          } else {
+            casShowOutput(result.data.result);
+          }
+        })
+        .catch(function () {
+          // A network failure (server unreachable) or a parse failure
+          // (res.json() rejecting on a non-JSON body) both land here --
+          // never the raw error object/text, since the point is a stable,
+          // generic message a user can act on either way.
+          casShowError("Error: request failed");
+        });
+    }
+
+    casSubmit.addEventListener("click", casSubmitExpression);
+    casInput.addEventListener("keydown", function (event) {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        casSubmitExpression();
+      }
+    });
+  }
 })();

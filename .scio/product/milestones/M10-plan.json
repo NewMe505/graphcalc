@@ -1,0 +1,21 @@
+{
+ "number": 10,
+ "title": "CAS tab wired to the CAS endpoints",
+ "branch": "milestone/10",
+ "features": [
+  {
+   "id": "P22",
+   "tier": "T1",
+   "notes": "Add the cas-* elements to the CAS panel. cas-op selects one of the seven ops. app.js sends each op to its /api/cas/* endpoint, using expr or equation with var. Show result or solutions in cas-output. On a 400, show the error and replace it on the next submit. Load no external resources. Long output wraps (P33). Add a browser test like the P18 and P34 tests.",
+   "depends_on": [],
+   "files": [
+    "graphcalc/static/index.html",
+    "graphcalc/static/app.js",
+    "graphcalc/static/style.css",
+    "tests/test_cas_ui.py",
+    "tests/test_cas_ui_browser.py"
+   ],
+   "rendered_check": false
+  }
+ ]
+}

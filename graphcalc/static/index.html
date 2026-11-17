@@ -86,6 +86,23 @@
 
   <section id="tab-cas" class="tab-panel">
     <h2>CAS</h2>
+    <div>
+      <label>Expression <input type="text" id="cas-input" autocomplete="off" spellcheck="false" placeholder="e.g. (x+1)^2"></label>
+      <label>Var <input type="text" id="cas-var" autocomplete="off" spellcheck="false" value="x"></label>
+      <label>Op
+        <select id="cas-op">
+          <option value="simplify" selected>simplify</option>
+          <option value="expand">expand</option>
+          <option value="factor">factor</option>
+          <option value="derivative">derivative</option>
+          <option value="integral">integral</option>
+          <option value="limit">limit</option>
+          <option value="solve">solve</option>
+        </select>
+      </label>
+      <button type="button" id="cas-submit">Submit</button>
+    </div>
+    <div id="cas-output" style="white-space: pre-wrap; overflow-wrap: anywhere;"></div>
   </section>
 
   <script src="/static/app.js"></script>

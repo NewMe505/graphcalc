@@ -129,6 +129,22 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/45",
       "merged_commit": "c2ac89fa3e478cb813730e98ad46521984cbbc3f",
       "usd": 23.715
+    },
+    {
+      "id": "M9",
+      "title": "Lists & Statistics tab and CAS algebra/calculus API",
+      "status": "done",
+      "branch": "milestone/9",
+      "features": [
+        "P18",
+        "P19",
+        "P20",
+        "P21"
+      ],
+      "pr_number": 50,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/50",
+      "merged_commit": "99df67eb7cecca168484d620cea9456da4067e0d",
+      "usd": 14.7263
     }
   ],
   "features": [
@@ -305,42 +321,42 @@
     {
       "id": "P18",
       "description": "The Lists & Statistics tab is wired to the list and statistics endpoints.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "4953c647cf84382bbef7567bdefb1720d88e9def",
+      "thread": "build-graphcalc-m4-p18-a1",
+      "tier": "T1",
+      "issue": 46,
+      "usd": 4.6451
     },
     {
       "id": "P19",
       "description": "POST /api/cas/simplify, /expand and /factor take {\"expr\"} and answer {\"result\"} in exact form with ^ for powers.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "df5b66f41d185abf7b66ce5157d4e3ecbcbc7276",
+      "thread": "build-graphcalc-m4-p19-a1",
+      "tier": "T1",
+      "issue": 47,
+      "usd": 3.5866
     },
     {
       "id": "P20",
       "description": "POST /api/cas/derivative {\"expr\",\"var\"}, /integral {\"expr\",\"var\",\"lower\",\"upper\" (optional)} and /limit {\"expr\",\"var\",\"point\",\"dir\" (optional)} answer {\"result\"}. lower, upper and point each accept a number or an expression string such as \"pi\" or \"oo\".",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "8edd43bc45db0ec1d1baa0a10c38643de2bda22b",
+      "thread": "build-graphcalc-m4-p20-a1",
+      "tier": "T1",
+      "issue": 48,
+      "usd": 5.003
     },
     {
       "id": "P21",
       "description": "POST /api/cas/solve takes {\"equation\":\"lhs=rhs\" or an expression taken to equal 0,\"var\"} and answers {\"solutions\":[str]} in exact form.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "8004dbaf5fdaad9bd8a0b83904d2c86f0d5b886e",
+      "thread": "build-graphcalc-m4-p21-a1",
+      "tier": "T0",
+      "issue": 49,
+      "usd": 1.4916
     },
     {
       "id": "P22",
@@ -473,5 +489,5 @@
       "usd": 1.6077
     }
   ],
-  "updated": "2026-11-17T18:00:52+00:00"
+  "updated": "2026-11-17T22:27:00+00:00"
 }

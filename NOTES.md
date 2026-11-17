@@ -1,5 +1,6 @@
 # Notes
 
+- M9 Lists & Statistics tab and CAS algebra/calculus API merged by `scio build`: P18 passed, P19 passed, P20 passed, P21 passed; $14.7263.
 - M8 Asymptote fix, lists, one-var stats and regression merged by `scio build`: P34 passed, P15 failed, P15 passed, P16 passed, P17 passed; $23.7150.
 - M7 Graph analysis, value table and Graphs tab UI merged by `scio build`: P12 passed, P13 passed, P14 passed; $9.5168.
 - M6 Disk-persisted state and graph plot/window API merged by `scio build`: P9 passed, P10 passed, P11 passed; $9.2876.
@@ -10,6 +11,33 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P22/S3 (2026-11-17): CAS submit error handling. `graphcalc/static/app.js`,
+  `tests/acceptance/test_p22_cas.py`. `casSubmitExpression()` (added in an
+  earlier P22 step, already wired to all seven `/api/cas/*` endpoints) now
+  calls a new `casClearOutput()` (clears `cas-output`'s `textContent` and
+  removes any `"error"` class) at the very start of every submit, before
+  the `fetch` even goes out -- so a new submit's own outcome, success or
+  failure, is the only thing ever shown, never a stale result or error left
+  over from the previous one. A non-OK response (e.g. a 400 from a
+  malformed expression like `"x^^2"`) now renders through a new
+  `casShowError()`: `"Error: " + body.error` as `cas-output`'s
+  `textContent`, plus an `"error"` class on the element (no matching CSS
+  rule added -- `graphcalc/static/style.css` is not one of this step's
+  expected files, and no acceptance criterion checks the class's visual
+  effect, only that cas-output's text shows an error and a later valid
+  submit replaces it). A network failure or a `res.json()` parse failure
+  (both already funneled into the same `.catch`) now shows a stable
+  generic `"Error: request failed"` through the same `casShowError()`,
+  instead of `String(err)`'s raw, unpredictable text. Added
+  `test_cas_browser_error_then_valid` to the existing
+  `tests/acceptance/test_p22_cas.py` (same `browser`/`live_server`
+  Playwright fixtures the file's other P22 test already uses): submits
+  `"x^^2"` with `simplify`, confirms `cas-output` shows a non-empty message
+  containing `"rror"`, then submits `(x+1)^2` with `expand` right after and
+  confirms `cas-output` now shows `"x^2 + 2*x + 1"` with no trace of the
+  earlier error text. Full suite: 518 passed, 4 skipped. No plan drift, no
+  design question: additive error-path wiring in one existing function,
+  tests in the one file this step named.
 - P20/S4 (2026-11-17): `_parse_bound` (`graphcalc/cas.py`), used by both
   `integral()`'s `"lower"`/`"upper"` and `limit()`'s `"point"`, now also
   accepts an expression string, not just a JSON number. `"oo"`, `"+oo"`,

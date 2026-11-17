@@ -79,20 +79,30 @@ but is not a plain real number (a bare symbol such as "x", "oo", or "zoo"
 from a "1/0" entry) is rejected here, since least-squares arithmetic on a
 symbolic value would not raise cleanly on its own.
 
-Only "linear" (y = a*x + b) is implemented by this step; fitting is
-dispatched through the small _FITS table keyed by model name, so a later
-step adding "quadratic" only needs one more entry there, not a change to
-regression()'s own validation/response-building. An unrecognized model
-name is CalcError the same as any other bad input. The linear fit solves
-the least-squares normal equations exactly with the input's own exact
-sympy numbers (no Rational() reconstruction needed -- xs/ys are already
-exact): a*Sxx + b*Sx = Sxy, a*Sx + b*n = Sy, solved directly for a and b.
-A zero denominator (n*Sxx - Sx**2, zero exactly when every x is equal,
-including the single-point n=1 case) is CalcError("regression requires at
-least two distinct x values") rather than a ZeroDivisionError -- this
-guard is also what keeps the later curve-building step from ever dividing
-by a zero x-range. r2 = 1 - SS_res/SS_tot; SS_tot = 0 (every y equal) is
-also CalcError, rather than a response with an undefined r2.
+"linear" (y = a*x + b) and "quadratic" (y = a*x**2 + b*x + c) are both
+implemented, dispatched through the small _FITS table keyed by model name
+so regression()'s own validation/response-building does not need to know
+which fit it is calling. An unrecognized model name is CalcError the same
+as any other bad input. The linear fit solves the least-squares normal
+equations exactly with the input's own exact sympy numbers (no Rational()
+reconstruction needed -- xs/ys are already exact): a*Sxx + b*Sx = Sxy,
+a*Sx + b*n = Sy, solved directly for a and b. A zero denominator (n*Sxx -
+Sx**2, zero exactly when every x is equal, including the single-point n=1
+case) is CalcError("regression requires at least two distinct x values")
+rather than a ZeroDivisionError -- this guard is also what keeps the later
+curve-building step from ever dividing by a zero x-range.
+
+The quadratic fit (plan step P17/S2) solves its own 3x3 normal equations
+-- a*S4 + b*S3 + c*S2 = Sx2y, a*S3 + b*S2 + c*S1 = Sxy, a*S2 + b*S1 + c*n =
+Sy, where Sk is sum(x**k) and Sx2y/Sxy are sum(x**2*y)/sum(x*y) -- exactly,
+via sympy.Matrix.solve() on the input's own exact Rational/Integer sums (no
+float ever enters, same as the linear fit). A singular coefficient matrix
+(det() == 0, which happens with fewer than three distinct x values) is
+CalcError("regression requires at least three distinct x values") rather
+than letting Matrix.solve() raise its own ValueError.
+
+r2 = 1 - SS_res/SS_tot is shared by every model; SS_tot = 0 (every y equal)
+is also CalcError, rather than a response with an undefined r2.
 
 Every coefficient, r2, and every "points"/"curve" entry is rendered with
 format_decimal(simplify(value), sig=12) by _regression_decimal -- the same
@@ -107,7 +117,7 @@ x-range rather than plot()'s float-pinned last sample) and predicts y at
 each with the fit's own predict function.
 """
 
-from sympy import Rational, nsimplify, simplify, sqrt, sympify
+from sympy import Matrix, Rational, nsimplify, simplify, sqrt, sympify
 
 from graphcalc.calc import CalcError
 from graphcalc.lists import validate_list_values
@@ -294,11 +304,45 @@ def _fit_linear(xs: list, ys: list) -> tuple:
     return {"a": a, "b": b}, predict
 
 
+def _fit_quadratic(xs: list, ys: list) -> tuple:
+    """Least-squares fit y = a*x**2 + b*x + c, solved exactly from the 3x3
+    normal equations a*S4 + b*S3 + c*S2 = Sx2y, a*S3 + b*S2 + c*S1 = Sxy,
+    a*S2 + b*S1 + c*n = Sy (plan step P17/S2).
+
+    `xs`/`ys` are already exact sympy numbers (see _xy_to_numbers), so every
+    power sum below stays an exact Rational/Integer -- no float ever enters
+    this computation, the same as _fit_linear above. The coefficient matrix
+    is singular (det() == 0) with fewer than three distinct x values
+    (including every xs value equal, or exactly two distinct values); that
+    is CalcError rather than letting Matrix.solve() raise its own
+    ValueError for a non-invertible matrix.
+
+    Returns ({"a": exact, "b": exact, "c": exact}, predict) where
+    predict(x) = a*x**2 + b*x + c.
+    """
+    n = len(xs)
+    s1 = sum(xs)
+    s2 = sum(value * value for value in xs)
+    s3 = sum(value**3 for value in xs)
+    s4 = sum(value**4 for value in xs)
+    sy = sum(ys)
+    sxy = sum(x_value * y_value for x_value, y_value in zip(xs, ys))
+    sx2y = sum(x_value * x_value * y_value for x_value, y_value in zip(xs, ys))
+
+    matrix = Matrix([[s4, s3, s2], [s3, s2, s1], [s2, s1, n]])
+    if matrix.det() == 0:
+        raise CalcError("regression requires at least three distinct x values")
+    a, b, c = matrix.solve(Matrix([sx2y, sxy, sy]))
+
+    def predict(x_value):
+        return a * x_value**2 + b * x_value + c
+
+    return {"a": a, "b": b, "c": c}, predict
+
+
 # Keyed by the request's "model" value; each entry is a _fit_linear-shaped
-# function (xs, ys) -> (coefficients, predict). Only "linear" is
-# implemented by this step -- a later step adding "quadratic" only needs
-# one more entry here, not a change to regression() itself.
-_FITS = {"linear": _fit_linear}
+# function (xs, ys) -> (coefficients, predict).
+_FITS = {"linear": _fit_linear, "quadratic": _fit_quadratic}
 
 
 def _regression_decimal(value) -> str:
@@ -319,9 +363,9 @@ def _regression_decimal(value) -> str:
 def regression(model, x: list, y: list) -> dict:
     """Compute a least-squares regression fit for POST /api/stats/regression.
 
-    `model` must be a key of _FITS (currently only "linear"); anything else
-    -- including a non-string, or "quadratic" before a later step adds it
-    -- is CalcError(f"unknown model: ..."). `x` and `y` are each validated
+    `model` must be a key of _FITS ("linear" or "quadratic"); anything else
+    -- including a non-string -- is CalcError(f"unknown model: ...").
+    `x` and `y` are each validated
     and parsed by _xy_to_numbers (see its own docstring); a mismatched
     length between them is CalcError here, checked only after both have
     already been validated individually, so a structurally bad `x` or `y`

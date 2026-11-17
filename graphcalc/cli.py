@@ -104,11 +104,11 @@ received. The response is {"model", "coefficients": {"a","b"[,"c"]},
 r2/points/curve number a 12-significant-digit decimal string (graphcalc.
 numfmt.format_decimal) with a clean "0" rather than "-0" or "1e-16" for an
 exact fit. "points" echoes the request's own ("x","y") pairs; "curve"
-holds 50 points evenly spaced across the data's x-range. Only "linear" is
-implemented by this step (see graphcalc.stats's own module docstring for
-the exact fit); an unrecognized "model", a malformed/mismatched-length
-"x"/"y", a non-numeric entry, or a degenerate fit (e.g. every x value
-equal) is a 400, never a 500.
+holds 50 points evenly spaced across the data's x-range. "model" is
+"linear" or "quadratic" (see graphcalc.stats's own module docstring for
+each exact fit); an unrecognized "model", a malformed/mismatched-length
+"x"/"y", a non-numeric entry, or a degenerate fit (e.g. too few distinct x
+values) is a 400, never a 500.
 """
 
 import argparse
@@ -857,12 +857,12 @@ def _handle_stats_regression(handler):
     "x", and "y" are handed to graphcalc.stats.regression() exactly as the
     client sent them (including a missing or wrong-typed one, e.g. "x" not
     present at all), and that pure function owns every validation decision:
-    an unrecognized "model" (only "linear" is implemented by this step), a
+    an unrecognized "model" ("linear" and "quadratic" are implemented), a
     malformed/empty/oversized "x" or "y" (graphcalc.lists.
     validate_list_values, reused there the same way PUT /api/lists/<name>
     already uses it), a non-string or unparseable entry, a non-real entry,
-    mismatched "x"/"y" lengths, or a degenerate fit (e.g. every x value
-    equal) are all raised as CalcError and turned into the same 400 here.
+    mismatched "x"/"y" lengths, or a degenerate fit (e.g. too few distinct
+    x values) are all raised as CalcError and turned into the same 400 here.
     The blanket catch-all below still backs up any exception
     graphcalc.stats.regression does not itself anticipate, the same
     "never a 500" rule every other route already follows.

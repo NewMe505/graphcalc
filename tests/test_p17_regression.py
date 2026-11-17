@@ -1,4 +1,4 @@
-"""Tests for plan step P17/S1: POST /api/stats/regression.
+"""Tests for plan step P17: POST /api/stats/regression.
 
 Acceptance bullet 1 ('linear on x [1,2,3], y [2,4,6] returns coefficients
 a "2", b "0" and r2 "1"'): test_regression_linear_exact_fit proves exactly
@@ -8,16 +8,18 @@ HTTP helper and server-building pattern tests/test_p16_onevar.py and
 tests/test_p15_lists.py already use. It also checks "points" echoes the
 request's own (x, y) pairs and "curve" holds 50 points.
 
+Acceptance bullet 2 ('quadratic on x [0,1,2,3], y [1,2,5,10] returns a
+"1", b "0", c "1", r2 "1"', plan step P17/S2): test_regression_quadratic_
+exact_fit proves exactly that, through the same route/server pattern.
+
 Acceptance bullet 3's "lists of different lengths return 400" half is
-proven by test_regression_400_mismatched_lengths; the quadratic half of
-that bullet, and bullet 2 (quadratic model), are a later plan step's job
-(_FITS currently only has "linear" -- see graphcalc/stats.py's own module
-docstring) and are not claimed here.
+proven by test_regression_400_mismatched_lengths.
 
 The remaining tests are the same "never a 500" checks
 tests/test_p16_onevar.py already runs for its own POST route, adapted to
 this route's own request shape: a non-string/unparseable "x"/"y" entry, an
-unknown "model", and a non-object body are all 400 with an "error" key.
+unknown "model" (plan step P17/S2's own acceptance line), and a non-object
+body are all 400 with an "error" key.
 """
 
 import threading
@@ -69,6 +71,25 @@ def test_regression_linear_exact_fit(base):
     assert len(body["curve"]) == 50, body
     assert body["curve"][0] == ["1", "2"], body
     assert body["curve"][-1] == ["3", "6"], body
+
+
+# ---- acceptance bullet 2: quadratic exact fit ----
+
+
+def test_regression_quadratic_exact_fit(base):
+    status, body = _post(
+        base,
+        "/api/stats/regression",
+        {"model": "quadratic", "x": ["0", "1", "2", "3"], "y": ["1", "2", "5", "10"]},
+    )
+    assert status == 200, body
+    assert body["model"] == "quadratic", body
+    assert body["coefficients"] == {"a": "1", "b": "0", "c": "1"}, body
+    assert body["r2"] == "1", body
+    assert body["points"] == [["0", "1"], ["1", "2"], ["2", "5"], ["3", "10"]], body
+    assert len(body["curve"]) == 50, body
+    assert body["curve"][0] == ["0", "1"], body
+    assert body["curve"][-1] == ["3", "10"], body
 
 
 # ---- acceptance bullet 3: mismatched lengths return 400 ----

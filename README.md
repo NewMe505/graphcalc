@@ -237,6 +237,55 @@ The calculator's math goes through a JSON API, one endpoint per operation:
   # {"error": "cannot redefine constant pi"} -- not added to the history
   ```
 
+The graphing API is a single endpoint, stateless and also never a 500:
+`POST /api/graph/plot`'s body is `{"functions": {"f1".."f4": expr}, "window":
+{"xmin","xmax","ymin","ymax"}, "samples": int}`. Each `expr` goes through the
+same grammar, no-sympy-constructors whitelist and freeze guard as
+`/api/calc/evaluate` (always in radians), with `"x"` bound as the sole free
+variable -- it never sees stored variables, functions, or `ans` (an
+expression that resolves to a free variable other than `"x"`, e.g. `"a*x"` or
+`"ans"`, is a 400, not silently treated as a free symbol or zero). Answers
+200 with `{"x": [float, ...], "series": {name: {"color": "#rrggbb", "y":
+[float | null, ...]}}}`: `x` is `samples` evenly spaced floats from `xmin` to
+`xmax`, both ends included (the last one is pinned to the exact float `xmax`,
+not accumulated by repeated addition). Each `y` sample is `null` -- a gap in
+the curve, never a 400 or a dropped sample -- whenever that one sample is
+non-real (`"sqrt(x)"` at `x=-1`), infinite (`"1/x"` at `x=0`, sympy's own
+`zoo`), or `nan`; a function that is unconditionally undefined everywhere
+(e.g. `"1/0"`, which never mentions `x` at all) comes back as every sample
+`null`, and the request as a whole still answers 200 either way. `ymin`/
+`ymax` only bound what a client should draw -- they are validated but never
+clip or rescale a `y` value the server returns. `f1` through `f4` each get
+one fixed, distinct color from `graphcalc.graph.SERIES_COLORS`: `"#1f77b4"`,
+`"#d62728"`, `"#2ca02c"`, `"#9467bd"`. A 400 (`{"error": <message>}`) covers:
+a function slot outside `f1`-`f4` (a literal `"f5"`, or a fifth function,
+e.g. `"unknown function slot: 'f5'"`), a missing/empty/non-dict `functions`,
+a function expression that is not a string, a missing/non-dict `window` or a
+missing/non-numeric/non-finite `xmin`/`xmax`/`ymin`/`ymax` (the bare
+`Infinity`/`-Infinity`/`NaN` tokens Python's own `json` module otherwise
+decodes without error are rejected too), `xmin >= xmax` or `ymin >= ymax`
+(e.g. `"window xmin must be less than xmax"`), and a missing/non-int (a bool
+does not count) `samples` outside `[2, 10000]`. A parse error or an unknown
+function call in an `expr` (the same checks `/api/calc/evaluate` already
+makes) is a 400 too, never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/graph/plot \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "x^2"}, "window": {"xmin": -2, "xmax": 2, "ymin": -1, "ymax": 5}, "samples": 5}'
+# {"x": [-2.0, -1.0, 0.0, 1.0, 2.0], "series": {"f1": {"color": "#1f77b4", "y": [4.0, 1.0, 0.0, 1.0, 4.0]}}}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/plot \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "1/x"}, "window": {"xmin": -1, "xmax": 1, "ymin": -5, "ymax": 5}, "samples": 3}'
+# {"x": [-1.0, 0.0, 1.0], "series": {"f1": {"color": "#1f77b4", "y": [-1.0, null, 1.0]}}}
+
+curl -s -X POST http://127.0.0.1:8000/api/graph/plot \
+  -H "Content-Type: application/json" \
+  -d '{"functions": {"f1": "x", "f2": "x", "f3": "x", "f4": "x", "f5": "x"}, "window": {"xmin": -1, "xmax": 1, "ymin": -1, "ymax": 1}, "samples": 2}'
+# {"error": "unknown function slot: 'f5'"}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and

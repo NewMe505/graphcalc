@@ -192,6 +192,37 @@
   `graphcalc/state.py`'s file I/O (`CalcState`), `graphcalc.history.
   StateBackedHistoryStore`, and `tests/test_p9_state_persistence.py`
   (restarts a real server subprocess on the same `--state` path).
+- `POST /api/graph/plot` (P10): samples up to four functions (`"f1"`..`"f4"`)
+  over a window. Body `{"functions": {"f1".."f4": expr}, "window":
+  {"xmin","xmax","ymin","ymax"}, "samples": int}` answers 200 `{"x": [float,
+  ...], "series": {name: {"color": "#rrggbb", "y": [float | null, ...]}}}`:
+  `x` is `samples` evenly spaced floats from `xmin` to `xmax` inclusive (the
+  last one pinned to the exact float `xmax`, never accumulated by repeated
+  addition). Each `y` sample is `null` -- a gap in the curve, status still
+  200 -- whenever that sample is non-real (`"sqrt(x)"` at `x=-1`), infinite
+  (`"1/x"` at `x=0`, sympy's own `zoo`), or `nan`; a function that is
+  unconditionally undefined everywhere (e.g. `"1/0"`) comes back as every
+  sample `null`. `f1`-`f4` each get one fixed, distinct color from new
+  `graphcalc.graph.SERIES_COLORS` (`"#1f77b4"`, `"#d62728"`, `"#2ca02c"`,
+  `"#9467bd"`). Reuses `graphcalc.calc.evaluate()` for parsing each
+  expression, with `"x"` bound as the sole free variable -- the same
+  grammar, no-sympy-constructors whitelist and `is_power_too_large` freeze
+  guard `/api/calc/evaluate` already enforces apply here too, and
+  `graphcalc.calc.CalcError` (bad syntax, an unknown function call, an
+  oversized power) escapes `graph.plot()` unchanged and is a 400 here as
+  well, not just the new `graphcalc.graph.GraphError`. 400 also covers: a
+  function slot outside `f1`-`f4` (a literal `"f5"`, or a fifth function), a
+  missing/empty/non-dict `functions`, a non-string function expression, a
+  missing/non-dict `window` or a missing/non-numeric/non-finite `xmin`/
+  `xmax`/`ymin`/`ymax` (`Infinity`/`-Infinity`/`NaN`, which Python's own
+  `json` module otherwise decodes without error, are rejected too),
+  `xmin >= xmax` or `ymin >= ymax`, a missing/non-int (bool excluded)
+  `samples` outside `[2, 10000]`, and a function expression mentioning a
+  free variable other than `"x"` (e.g. `"a*x"`, `"ans"`). Never a 500.
+  Stateless -- unlike `/api/calc/evaluate`, it never reads or writes the
+  server's stored variables, functions, `ans`, or history. Added
+  `graphcalc/graph.py` (`plot`, `GraphError`, `SERIES_COLORS`,
+  `MIN_SAMPLES`/`MAX_SAMPLES`) and `tests/test_p10_graph_plot.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

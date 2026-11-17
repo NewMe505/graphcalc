@@ -33,6 +33,12 @@ _handle_graph_plot, which defers the actual parsing, sampling and
 evaluation to graphcalc.graph.plot(). Stateless: unlike /api/calc/evaluate,
 it never reads from or writes to the HTTPServer's CalcState or history
 store.
+
+POST /api/graph/window (plan step P11) lives next to it -- see
+_handle_graph_window, which defers to graphcalc.graph.window(). Also
+stateless: the client sends the window it already has (or none at all,
+for the default "standard" window) and gets the next one back; this
+server never remembers a "current" window across requests.
 """
 
 import argparse
@@ -52,6 +58,7 @@ CALC_HISTORY_PATH = "/api/calc/history"
 CALC_VARS_PATH = "/api/calc/vars"
 STATE_RESET_PATH = "/api/state/reset"
 GRAPH_PLOT_PATH = "/api/graph/plot"
+GRAPH_WINDOW_PATH = "/api/graph/window"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -437,6 +444,43 @@ def _handle_graph_plot(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_graph_window(handler):
+    """POST /api/graph/window: {"action","factor","dx","dy","window"} ->
+    graph.window's dict, 200 JSON (plan step P11/S1).
+
+    A malformed body, a non-object body, or a graphcalc.graph.GraphError
+    (an unknown action, a bad window, or a bad factor/dx/dy) is a JSON
+    400. Unlike _handle_graph_plot, graph.window() never calls
+    graphcalc.calc.evaluate, so there is no CalcError to catch here -- see
+    graphcalc.graph's own module docstring. The catch-all at the very end
+    is this handler's own backstop for anything else: this endpoint must
+    never answer with a 500.
+
+    graphcalc.graph is imported lazily, the same reason graphcalc.calc is
+    imported lazily in _handle_calc_evaluate: every other route keeps
+    working even if sympy were ever unavailable.
+    """
+    from graphcalc import graph
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = graph.window(payload)
+        except graph.GraphError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -451,6 +495,7 @@ class Handler(BaseHTTPRequestHandler):
     - GET /api/calc/vars        -> see _handle_calc_vars_get
     - POST /api/state/reset     -> see _handle_state_reset
     - POST /api/graph/plot      -> see _handle_graph_plot
+    - POST /api/graph/window    -> see _handle_graph_window
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -481,6 +526,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == GRAPH_PLOT_PATH:
             _handle_graph_plot(self)
+            return
+        if self.path == GRAPH_WINDOW_PATH:
+            _handle_graph_window(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

@@ -1,7 +1,9 @@
-"""Graphing core for POST /api/graph/plot (plan step P10/S1).
+"""Graphing core for POST /api/graph/plot and POST /api/graph/window
+(plan steps P10/S1 and P11/S1).
 
-plot(body) is the only thing graphcalc/cli.py calls; it never touches the
-network. It deliberately does not re-implement the calculator's own
+plot(body) and window(body) are the only things graphcalc/cli.py calls
+from here; neither ever touches the network. plot() deliberately does
+not re-implement the calculator's own
 parsing/safety rules -- grammar restrictions, the no-sympy-constructors
 guard, and the is_power_too_large freeze guard -- it reuses
 graphcalc.calc.evaluate() for that, the exact same way a stored "f(x):=expr"
@@ -141,8 +143,12 @@ def _evaluate_at(parsed, x_value):
         return None
 
 
-def _window_bound(window, key):
-    """Return window[key] as a float, or raise GraphError.
+def _finite_number(container, key, label):
+    """Return container[key] as a float, or raise GraphError.
+
+    Shared by _window_bound (label "window parameter", for plot()'s own
+    window) and window()'s own "factor"/"dx"/"dy" body parameters (plan
+    step P11/S1) -- the same two rules apply to all of them:
 
     A bool is rejected even though Python's bool is an int subclass --
     {"xmin": true, ...} should 400, not silently become 1.0.
@@ -152,17 +158,129 @@ def _window_bound(window, key):
     non-standard, but on-by-default, extension, so a literal request body
     of {"xmin": Infinity, ...} decodes to a real Python float('inf')
     rather than failing to parse at all -- a non-finite bound must still
-    400, the same as a missing or non-numeric one, since plot()'s own
-    "xmin must be less than xmax" check can mistakenly "pass" with an
-    infinite bound.
+    400, the same as a missing or non-numeric one, since a "less than"
+    comparison built on it can mistakenly "pass" with an infinite value.
     """
-    value = window.get(key) if isinstance(window, dict) else None
+    value = container.get(key) if isinstance(container, dict) else None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise GraphError(f"missing or invalid window parameter: {key}")
+        raise GraphError(f"missing or invalid {label}: {key}")
     value = float(value)
     if not math.isfinite(value):
-        raise GraphError(f"window parameter must be finite: {key}")
+        raise GraphError(f"{label} must be finite: {key}")
     return value
+
+
+def _window_bound(window, key):
+    """Return window[key] as a float, or raise GraphError.
+
+    See _finite_number for the two rules this enforces (non-bool number,
+    finite).
+    """
+    return _finite_number(window, key, "window parameter")
+
+
+def _plain_number(value):
+    """Return `value` as an int when it is a whole number, else as a float.
+
+    Plan step P11's planner notes: "Return plain numbers (ints when
+    whole)." window()'s own arithmetic (halving/doubling a span, adding a
+    pan delta) is plain float math throughout, so a result that is
+    mathematically a whole number -- e.g. the acceptance criteria's own
+    -5.0 from zooming -10..10 in by a factor of 2 -- would otherwise
+    round-trip through JSON as -5.0, not the -5 the criteria list. math.
+    isfinite guards int(value) itself: int() on an infinite or nan float
+    raises, but window()'s own inputs are already validated finite before
+    any arithmetic happens, so this is a defensive check, not a path any
+    acceptance criterion reaches.
+    """
+    if math.isfinite(value) and value == int(value):
+        return int(value)
+    return value
+
+
+def window(body):
+    """Build the POST /api/graph/window response dict for `body` (plan
+    step P11/S1).
+
+    `body` is {"action": "zoom_in" | "zoom_out" | "pan" | "standard",
+    "factor", "dx", "dy", "window"}. Returns {"xmin", "xmax", "ymin",
+    "ymax"} as plain numbers (see _plain_number).
+
+    "standard" ignores every other key and always answers the fixed
+    -10..10 window on both axes (PRODUCT.md's own wording for P11),
+    before any window/factor/dx/dy validation runs.
+
+    Every other action first resolves the window to operate on:
+    "window" missing (absent or JSON null) defaults to that same standard
+    -10..10 window -- this is what lets the acceptance criteria's own pan
+    example, {"action":"pan","dx":1,"dy":-2} with no "window" key at all,
+    read as "on the standard window" -- otherwise "window" must be an
+    object with finite, non-bool xmin/xmax/ymin/ymax (_window_bound) with
+    xmin < xmax and ymin < ymax, the same rules plot() enforces on the
+    same shape.
+
+    "zoom_in"/"zoom_out" then needs a "factor": a finite, non-bool,
+    strictly positive number (_finite_number plus its own > 0 check) --
+    zero or a negative factor would collapse or invert the window, never
+    a sensible zoom. Zooms about the window's own center: factor 2 halves
+    (zoom_in) or doubles (zoom_out) each axis's half-span, recentered on
+    the unchanged (xmin+xmax)/2 and (ymin+ymax)/2.
+
+    "pan" needs "dx" and "dy": finite, non-bool numbers (_finite_number),
+    added straight onto xmin/xmax (dx) and ymin/ymax (dy) -- a pure
+    translation, so the window's width and height are unchanged.
+
+    Any other "action" value (including a missing one) is a GraphError,
+    a 400 for graphcalc.cli -- "an unknown action returns 400" (PRODUCT.md
+    P11's own acceptance criterion).
+    """
+    if not isinstance(body, dict):
+        raise GraphError("invalid request body")
+
+    action = body.get("action")
+    if action == "standard":
+        return {"xmin": -10, "xmax": 10, "ymin": -10, "ymax": 10}
+    if action not in ("zoom_in", "zoom_out", "pan"):
+        raise GraphError(f"unknown action: {action!r}")
+
+    raw_window = body.get("window")
+    if raw_window is None:
+        xmin, xmax, ymin, ymax = -10.0, 10.0, -10.0, 10.0
+    elif isinstance(raw_window, dict):
+        xmin = _window_bound(raw_window, "xmin")
+        xmax = _window_bound(raw_window, "xmax")
+        ymin = _window_bound(raw_window, "ymin")
+        ymax = _window_bound(raw_window, "ymax")
+        if xmin >= xmax:
+            raise GraphError("window xmin must be less than xmax")
+        if ymin >= ymax:
+            raise GraphError("window ymin must be less than ymax")
+    else:
+        raise GraphError("window must be an object")
+
+    if action in ("zoom_in", "zoom_out"):
+        factor = _finite_number(body, "factor", "factor")
+        if factor <= 0:
+            raise GraphError("factor must be positive")
+        scale = (1.0 / factor) if action == "zoom_in" else factor
+        xcenter = (xmin + xmax) / 2.0
+        ycenter = (ymin + ymax) / 2.0
+        xhalf = (xmax - xmin) / 2.0 * scale
+        yhalf = (ymax - ymin) / 2.0 * scale
+        xmin, xmax = xcenter - xhalf, xcenter + xhalf
+        ymin, ymax = ycenter - yhalf, ycenter + yhalf
+    else:  # pan
+        dx = _finite_number(body, "dx", "dx")
+        dy = _finite_number(body, "dy", "dy")
+        xmin, xmax = xmin + dx, xmax + dx
+        ymin, ymax = ymin + dy, ymax + dy
+
+    return {
+        "xmin": _plain_number(xmin),
+        "xmax": _plain_number(xmax),
+        "ymin": _plain_number(ymin),
+        "ymax": _plain_number(ymax),
+    }
 
 
 def plot(body):

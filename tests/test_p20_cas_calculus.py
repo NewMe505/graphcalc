@@ -1,5 +1,5 @@
-"""Tests for plan step P20/S1 (POST /api/cas/derivative) and P20/S2
-(POST /api/cas/integral).
+"""Tests for plan step P20/S1 (POST /api/cas/derivative), P20/S2
+(POST /api/cas/integral) and P20/S3 (POST /api/cas/limit).
 
 F1 (PRODUCT.md, [failing] before P20/S1): 'derivative of "x*sin(x)" by x
 returns "x*cos(x) + sin(x)"'. test_p20_derivative_product_rule proves
@@ -50,6 +50,27 @@ explicitly rejected even though Python's bool is an int subclass);
 test_p20_integral_unit_bool_bound_raises_calc_error and
 test_p20_integral_unit_object_bound_raises_calc_error prove the same two
 cases directly raise CalcError from graphcalc.cas.integral.
+
+F3 (PRODUCT.md, [failing] before P20/S3): 'limit of "sin(x)/x" at point 0
+returns "1"; limit of "1/x" at point 0 with dir "+" returns "oo"'.
+test_p20_limit_two_sided_sinx_over_x and test_p20_limit_one_sided_plus_1_over_x
+prove exactly that through the real POST /api/cas/limit route;
+test_p20_limit_unit_two_sided_sinx_over_x and
+test_p20_limit_unit_one_sided_plus_1_over_x prove the same two things
+directly against graphcalc.cas.limit(), with no HTTP involved.
+
+test_p20_limit_400_dir_non_plus_minus_string and
+test_p20_limit_400_dir_non_string prove an invalid "dir" -- a string
+other than "+"/"-", or a non-string such as 5 -- is a JSON 400;
+test_p20_limit_unit_dir_non_plus_minus_string_raises_calc_error and
+test_p20_limit_unit_dir_non_string_raises_calc_error prove the same two
+cases directly raise CalcError from graphcalc.cas.limit.
+test_p20_limit_400_missing_point proves a missing "point" is a JSON 400,
+never a 500. test_p20_limit_400_two_sided_1_over_x and
+test_p20_limit_unit_two_sided_1_over_x_raises_calc_error prove the
+two-sided limit of "1/x" at 0 -- where sympy.limit() hands back its own
+zoo instead of raising -- is also a CalcError/400, not a 200 echoing an
+undefined "zoo" result.
 """
 
 import pytest
@@ -205,3 +226,83 @@ def test_p20_integral_400_object_bound(base):
 def test_p20_integral_unit_object_bound_raises_calc_error():
     with pytest.raises(CalcError):
         cas.integral("x^2", "x", {}, 1)
+
+
+# ---- F3: limit of "sin(x)/x" at 0 returns "1"; limit of "1/x" at 0 with dir "+" returns "oo" ----
+
+
+def test_p20_limit_two_sided_sinx_over_x(base):
+    status, body = _post(base, "/api/cas/limit", {"expr": "sin(x)/x", "var": "x", "point": 0})
+    assert status == 200, body
+    assert body == {"result": "1"}, body
+
+
+def test_p20_limit_unit_two_sided_sinx_over_x():
+    assert cas.limit("sin(x)/x", "x", 0) == "1"
+
+
+def test_p20_limit_one_sided_plus_1_over_x(base):
+    status, body = _post(
+        base, "/api/cas/limit", {"expr": "1/x", "var": "x", "point": 0, "dir": "+"}
+    )
+    assert status == 200, body
+    assert body == {"result": "oo"}, body
+
+
+def test_p20_limit_unit_one_sided_plus_1_over_x():
+    assert cas.limit("1/x", "x", 0, "+") == "oo"
+
+
+# ---- an invalid "dir" (not None, "+" or "-") is a JSON 400 ----
+
+
+def test_p20_limit_400_dir_non_plus_minus_string(base):
+    status, body = _post(
+        base, "/api/cas/limit", {"expr": "1/x", "var": "x", "point": 0, "dir": "x"}
+    )
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_limit_unit_dir_non_plus_minus_string_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.limit("1/x", "x", 0, "x")
+
+
+def test_p20_limit_400_dir_non_string(base):
+    status, body = _post(base, "/api/cas/limit", {"expr": "1/x", "var": "x", "point": 0, "dir": 5})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_limit_unit_dir_non_string_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.limit("1/x", "x", 0, 5)
+
+
+# ---- a missing "point" is a JSON 400 ----
+
+
+def test_p20_limit_400_missing_point(base):
+    status, body = _post(base, "/api/cas/limit", {"expr": "sin(x)/x", "var": "x"})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_limit_unit_missing_point_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.limit("sin(x)/x", "x", None)
+
+
+# ---- a two-sided limit that does not exist (sympy hands back zoo) is a JSON 400, not a 500 ----
+
+
+def test_p20_limit_400_two_sided_1_over_x(base):
+    status, body = _post(base, "/api/cas/limit", {"expr": "1/x", "var": "x", "point": 0})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_p20_limit_unit_two_sided_1_over_x_raises_calc_error():
+    with pytest.raises(CalcError):
+        cas.limit("1/x", "x", 0)

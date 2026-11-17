@@ -1,13 +1,14 @@
 """CAS algebra core for POST /api/cas/simplify, /expand, /factor,
-/derivative and /integral.
+/derivative, /integral and /limit.
 
 Plan step P19/S1 implemented simplify(expr); plan step P19/S2 added
 expand(expr) next to it in this same module; plan step P19/S3 added
 factor(expr) to complete that set. Plan step P20/S1 adds derivative(expr,
 var) next to them. Plan step P20/S2 adds integral(expr, var, lower=None,
-upper=None). simplify(), expand(), factor(), derivative() and integral()
-are the only things graphcalc/cli.py calls from here; neither they nor
-_parse ever touches the network.
+upper=None). Plan step P20/S3 adds limit(expr, var, point, dir=None).
+simplify(), expand(), factor(), derivative(), integral() and limit() are
+the only things graphcalc/cli.py calls from here; neither they nor _parse
+ever touches the network.
 
 _parse(expr) turns `expr` into a sympy expression and is deliberately built
 the same way graphcalc.calc.evaluate() parses its own input (plan steps
@@ -79,16 +80,31 @@ results stay exact" the same way every other CAS operation's result is
 exact. Any other type (str, list, dict, None, ...) raises CalcError; a
 later plan step teaches this helper to also accept an expression string
 such as "pi" or "oo" for /integral's bounds and /limit's point.
+
+limit(expr, var, point, dir=None) (plan step P20/S3) parses `point` with
+_parse_bound (the same JSON-number-only rule described above) and runs
+sympy.limit() with respect to `var`. `dir` is None (two-sided, sympy's own
+dir="+-"), "+" or "-"; any other value -- including a non-string such as
+5 -- raises CalcError before `expr` is even parsed. sympy.limit() itself
+sometimes raises (e.g. a ValueError for "sign(x)" at 0, where the two
+one-sided limits disagree) and sometimes just returns sympy's own zoo
+(complex infinity) or nan (e.g. the two-sided limit of "1/x" at 0, which
+sympy evaluates to zoo without raising); both are translated into
+CalcError here, never left to reach graphcalc/cli.py as anything but the
+usual JSON 400. A real infinity (sympy.oo/-oo) is a legitimate answer --
+e.g. the one-sided limit of "1/x" at 0 with dir="+" -- and renders as
+"oo"/"-oo" through the same to_text() every other CAS result uses.
 """
 
 import math
 
-from sympy import Integer, Symbol
+from sympy import Integer, Symbol, nan, zoo
 from sympy import Integral as _sympy_Integral
 from sympy import diff as _sympy_diff
 from sympy import expand as _sympy_expand
 from sympy import factor as _sympy_factor
 from sympy import integrate as _sympy_integrate
+from sympy import limit as _sympy_limit
 from sympy import nsimplify
 from sympy import simplify as _sympy_simplify
 from sympy.parsing.sympy_parser import parse_expr
@@ -254,4 +270,43 @@ def integral(expr: str, var: str, lower=None, upper=None) -> str:
         raise CalcError(f"invalid expression: {expr}") from exc
     if result.has(_sympy_Integral):
         raise CalcError("no closed form")
+    return to_text(result)
+
+
+def limit(expr: str, var: str, point, dir=None) -> str:
+    """Parse `expr`, run sympy.limit() on it with respect to `var` as it
+    approaches `point`, and return the "^"-notation text of the result
+    (plan step P20/S3).
+
+    e.g. limit("sin(x)/x", "x", 0) -> "1" (the two-sided limit, sympy's own
+    dir="+-"); limit("1/x", "x", 0, "+") -> "oo". `dir` must be None, "+"
+    or "-" -- any other value, including a non-string such as 5, raises
+    CalcError before `expr` is even parsed. `point` is parsed by
+    _parse_bound (see its own docstring for what it currently accepts),
+    the same helper integral() uses for "lower"/"upper". `var` must be a
+    plain ASCII identifier string, the same rule derivative() and
+    integral() already apply, checked before `expr` is even parsed. If
+    sympy.limit() raises (e.g. the two one-sided limits disagree, as with
+    "sign(x)" at 0) or hands back sympy's own zoo/nan instead of a value
+    (e.g. the two-sided limit of "1/x" at 0), this raises CalcError("limit
+    does not exist: ...") rather than echoing an undefined result as if it
+    were an answer. A malformed `expr`, or any other sympy failure, also
+    raises CalcError, never any other exception.
+    """
+    if not isinstance(var, str) or not var.isascii() or not var.isidentifier():
+        raise CalcError(f"invalid variable: {var!r}")
+    if dir is not None and dir not in ("+", "-"):
+        raise CalcError(f"invalid dir: {dir!r}")
+    parsed = _parse(expr)
+    symbol = Symbol(var)
+    pt = _parse_bound(point, "point")
+    sympy_dir = dir if dir is not None else "+-"
+    try:
+        result = _sympy_limit(parsed, symbol, pt, dir=sympy_dir)
+    except CalcError:
+        raise
+    except Exception as exc:
+        raise CalcError(f"limit does not exist: {expr}") from exc
+    if result == zoo or result == nan:
+        raise CalcError(f"limit does not exist: {expr}")
     return to_text(result)

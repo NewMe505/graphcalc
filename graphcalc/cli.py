@@ -140,6 +140,7 @@ CAS_EXPAND_PATH = "/api/cas/expand"
 CAS_FACTOR_PATH = "/api/cas/factor"
 CAS_DERIVATIVE_PATH = "/api/cas/derivative"
 CAS_INTEGRAL_PATH = "/api/cas/integral"
+CAS_LIMIT_PATH = "/api/cas/limit"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -1062,6 +1063,57 @@ def _handle_cas_integral(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_cas_limit(handler):
+    """POST /api/cas/limit {"expr","var","point","dir" (optional)} -> 200
+    JSON {"result": str} (plan step P20/S3).
+
+    Like /derivative and /integral, this route takes a second body key,
+    "var", so it does not fit _handle_cas_op's single-"expr" shape --
+    hence this sibling handler. A malformed body, a non-object body, or a
+    missing or non-string "expr"/"var" are rejected exactly as
+    _handle_cas_derivative rejects them ("missing parameter: expr"/
+    "missing parameter: var"). "point" is required and "dir" is optional;
+    both are forwarded to graphcalc.cas.limit exactly as the client sent
+    them (whatever JSON type they are) -- that function owns every
+    remaining parsing/algebra/guard decision, including rejecting a
+    missing/non-number "point" and a "dir" that is not None, "+" or "-".
+    A graphcalc.calc.CalcError it raises becomes this route's own JSON
+    400. The blanket catch-all below still backs up any exception neither
+    of those anticipates, the same "never a 500" rule every other route
+    already follows.
+    """
+    from graphcalc import cas
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        expr = payload.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            _send_json(handler, 400, {"error": "missing parameter: expr"})
+            return
+        var = payload.get("var")
+        if not isinstance(var, str) or not var.strip():
+            _send_json(handler, 400, {"error": "missing parameter: var"})
+            return
+        point = payload.get("point")
+        dir_ = payload.get("dir")
+        try:
+            result = cas.limit(expr, var, point, dir_)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, {"result": result})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -1090,6 +1142,7 @@ class Handler(BaseHTTPRequestHandler):
     - POST /api/cas/factor      -> see _handle_cas_factor
     - POST /api/cas/derivative  -> see _handle_cas_derivative
     - POST /api/cas/integral    -> see _handle_cas_integral
+    - POST /api/cas/limit       -> see _handle_cas_limit
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -1156,6 +1209,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == CAS_INTEGRAL_PATH:
             _handle_cas_integral(self)
+            return
+        if self.path == CAS_LIMIT_PATH:
+            _handle_cas_limit(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

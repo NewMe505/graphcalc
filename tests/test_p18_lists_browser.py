@@ -1,5 +1,6 @@
-"""Real-browser test for plan step P18/S2: the Lists & Statistics tab's
-app.js wiring to /api/lists and /api/stats/onevar.
+"""Real-browser tests for plan steps P18/S2 and P18/S3: the Lists &
+Statistics tab's app.js wiring to /api/lists, /api/stats/onevar and
+/api/stats/regression.
 
 F3 (plan step P18, feature list): "Real browser: L1 [1,2,3,4,5] appears in
 list-grid; choosing L1 in stats-list shows n 5 and mean 3 in stats-output."
@@ -10,6 +11,14 @@ server the same way tests/acceptance/test_p34_asymptote.py's own `browser`
 fixture does for the Graphs tab (plan step P34/S1): the whole module skips
 outright -- never fails -- when Playwright or its Chromium build is not
 available.
+
+F4 (plan step P18, feature list): "Real browser: a linear regression of
+L2 [2,4,6] on L1 [1,2,3] shows a = 2 and b = 0 in regression-output and
+draws on stats-canvas (at least one pixel is not blank)."
+test_p18_browser_regression proves exactly that, driving app.js's own
+regressionRun() (plan step P18/S3) the same way test_p18_browser_onevar
+drives statsRefreshOnevar() above -- both owner-revision (2026-11-17)
+checks PRODUCT.md calls for.
 
 The server itself is started the same way tests/test_p16_onevar.py's own
 test_onevar_400_empty_list starts one: an on-disk CalcState backed by a
@@ -141,5 +150,64 @@ def test_p18_browser_onevar(browser, live_server):
         )
         assert stats.get("n") == "5", stats
         assert stats.get("mean") == "3", stats
+    finally:
+        page.close()
+
+
+def test_p18_browser_regression(browser, live_server):
+    status, body = _put(live_server, "/api/lists/L1", {"values": ["1", "2", "3"]})
+    assert status == 200, body
+    status, body = _put(live_server, "/api/lists/L2", {"values": ["2", "4", "6"]})
+    assert status == 200, body
+
+    page = browser.new_page()
+    try:
+        page.goto(live_server + "/")
+        page.click('button[data-tab="tab-lists"]')
+
+        # loadLists() fills regression-x/regression-y the same way it
+        # fills stats-list; wait until both L1 and L2 are offered in both
+        # before selecting them.
+        page.wait_for_function(
+            "document.querySelector('#regression-x option[value=\"L1\"]') !== null"
+            " && document.querySelector('#regression-y option[value=\"L2\"]') !== null"
+        )
+        page.select_option("#regression-model", "linear")
+        page.select_option("#regression-x", "L1")
+        page.select_option("#regression-y", "L2")
+        page.click("#regression-run")
+
+        # regressionRun() POSTs to /api/stats/regression and renders the
+        # response's own coefficients as "key = value" lines
+        # (statsRenderRegression); wait for the fit to land, then check
+        # both coefficients as plain substrings of regression-output's text
+        # -- exactly the strings PRODUCT.md's own acceptance text names.
+        page.wait_for_function(
+            "document.getElementById('regression-output').textContent.includes('a = 2')"
+        )
+        output_text = page.inner_text("#regression-output")
+        assert "a = 2" in output_text, output_text
+        assert "b = 0" in output_text, output_text
+
+        # statsRenderRegressionPlot draws the data points and the fitted
+        # line on stats-canvas in the same synchronous callback that just
+        # set regression-output's text above, so by now the canvas is no
+        # longer blank: at least one pixel's alpha channel must be
+        # non-zero, the same "did it actually draw something" check
+        # tests/acceptance/test_p34_asymptote.py uses for graph-canvas.
+        has_pixel = page.evaluate(
+            """() => {
+                const canvas = document.getElementById('stats-canvas');
+                const ctx = canvas.getContext('2d');
+                const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                for (let i = 3; i < data.length; i += 4) {
+                    if (data[i] !== 0) {
+                        return true;
+                    }
+                }
+                return false;
+            }"""
+        )
+        assert has_pixel
     finally:
         page.close()

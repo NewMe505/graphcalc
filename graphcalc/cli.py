@@ -27,6 +27,12 @@ HistoryStore), not the on-disk shape, which P9 unified. `--in-memory` passes
 no path to CalcState and plugs in a plain InMemoryHistoryStore instead, so
 nothing ever touches disk (see serve()). POST /api/state/reset
 (_handle_state_reset) empties both in one call.
+
+The graphing API (plan step P10) lives at POST /api/graph/plot -- see
+_handle_graph_plot, which defers the actual parsing, sampling and
+evaluation to graphcalc.graph.plot(). Stateless: unlike /api/calc/evaluate,
+it never reads from or writes to the HTTPServer's CalcState or history
+store.
 """
 
 import argparse
@@ -45,6 +51,7 @@ CALC_EVALUATE_PATH = "/api/calc/evaluate"
 CALC_HISTORY_PATH = "/api/calc/history"
 CALC_VARS_PATH = "/api/calc/vars"
 STATE_RESET_PATH = "/api/state/reset"
+GRAPH_PLOT_PATH = "/api/graph/plot"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -390,6 +397,46 @@ def _handle_calc_evaluate(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_graph_plot(handler):
+    """POST /api/graph/plot: {"functions","window","samples"} -> graph.plot's
+    dict, 200 JSON (plan step P10/S1).
+
+    A malformed body, a non-object body, or a graphcalc.graph.GraphError
+    (bad function slot, bad window, bad sample count, or a free variable
+    other than "x") is a JSON 400. graphcalc.calc.CalcError -- bad syntax,
+    an unknown function call, or an expression the freeze guard flags, all
+    of which graph.plot() can raise unchanged, via graphcalc.graph.
+    _parse_function reusing graphcalc.calc.evaluate -- is also a JSON 400
+    here, not just GraphError (see graphcalc.graph's own module docstring
+    for why both are expected). The catch-all at the very end is this
+    handler's own backstop for anything neither of those two covers: this
+    endpoint must never answer with a 500.
+
+    graphcalc.graph is imported lazily, the same reason graphcalc.calc is
+    imported lazily in _handle_calc_evaluate: every other route keeps
+    working even if sympy were ever unavailable.
+    """
+    from graphcalc import calc, graph
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        try:
+            result = graph.plot(payload)
+        except (graph.GraphError, calc.CalcError) as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -403,6 +450,7 @@ class Handler(BaseHTTPRequestHandler):
     - DELETE /api/calc/history  -> see _handle_calc_history_delete
     - GET /api/calc/vars        -> see _handle_calc_vars_get
     - POST /api/state/reset     -> see _handle_state_reset
+    - POST /api/graph/plot      -> see _handle_graph_plot
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -430,6 +478,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == STATE_RESET_PATH:
             _handle_state_reset(self)
+            return
+        if self.path == GRAPH_PLOT_PATH:
+            _handle_graph_plot(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

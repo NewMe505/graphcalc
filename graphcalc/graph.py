@@ -24,6 +24,8 @@ symbol other than "x" left in the simplified result is a GraphError, never
 silently plotted as if it were zero.
 """
 
+import math
+
 from sympy import Float, Symbol, nan, oo, sympify, zoo
 
 from graphcalc.calc import evaluate
@@ -144,11 +146,23 @@ def _window_bound(window, key):
 
     A bool is rejected even though Python's bool is an int subclass --
     {"xmin": true, ...} should 400, not silently become 1.0.
+
+    math.isfinite rejects inf/-inf/nan too: Python's json module accepts
+    the bare (unquoted) tokens Infinity, -Infinity and NaN as a
+    non-standard, but on-by-default, extension, so a literal request body
+    of {"xmin": Infinity, ...} decodes to a real Python float('inf')
+    rather than failing to parse at all -- a non-finite bound must still
+    400, the same as a missing or non-numeric one, since plot()'s own
+    "xmin must be less than xmax" check can mistakenly "pass" with an
+    infinite bound.
     """
     value = window.get(key) if isinstance(window, dict) else None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise GraphError(f"missing or invalid window parameter: {key}")
-    return float(value)
+    value = float(value)
+    if not math.isfinite(value):
+        raise GraphError(f"window parameter must be finite: {key}")
+    return value
 
 
 def plot(body):
@@ -164,9 +178,14 @@ def plot(body):
       and "a fifth function" (plan step P10's acceptance criteria): any
       slot name outside f1-f4, including a literal "f5", is rejected before
       any parsing happens.
-    - a missing/non-dict "window", or a missing/non-numeric xmin/xmax/ymin/
-      ymax.
-    - xmin >= xmax (the acceptance criteria's own wording).
+    - a function's expression not being a string (plan step P10/S3), e.g.
+      {"f1": 5} -- also rejected before any parsing happens, so this is a
+      GraphError, not the CalcError("missing parameter: expr")
+      graphcalc.calc.evaluate would otherwise raise for the same input.
+    - a missing/non-dict "window", or a missing/non-numeric/non-finite
+      xmin/xmax/ymin/ymax (see _window_bound).
+    - xmin >= xmax (the acceptance criteria's own wording), or ymin >= ymax
+      (plan step P10/S3, the same rule applied to the other axis).
     - a missing/non-int "samples", or one outside [MIN_SAMPLES, MAX_SAMPLES].
 
     graphcalc.calc.CalcError can also escape unchanged, from _parse_function
@@ -184,19 +203,23 @@ def plot(body):
     functions = body.get("functions")
     if not isinstance(functions, dict) or not functions:
         raise GraphError("missing parameter: functions")
-    for name in functions:
+    for name, expr_text in functions.items():
         if name not in SERIES_COLORS:
             raise GraphError(f"unknown function slot: {name!r}")
+        if not isinstance(expr_text, str):
+            raise GraphError(f"function {name} must be a string")
 
     window = body.get("window")
     if not isinstance(window, dict):
         raise GraphError("missing parameter: window")
     xmin = _window_bound(window, "xmin")
     xmax = _window_bound(window, "xmax")
-    _window_bound(window, "ymin")
-    _window_bound(window, "ymax")
+    ymin = _window_bound(window, "ymin")
+    ymax = _window_bound(window, "ymax")
     if xmin >= xmax:
         raise GraphError("window xmin must be less than xmax")
+    if ymin >= ymax:
+        raise GraphError("window ymin must be less than ymax")
 
     samples = body.get("samples")
     if isinstance(samples, bool) or not isinstance(samples, int):

@@ -135,6 +135,13 @@ LISTS_PATH = "/api/lists"
 LISTS_PREFIX = "/api/lists/"
 STATS_ONEVAR_PATH = "/api/stats/onevar"
 STATS_REGRESSION_PATH = "/api/stats/regression"
+CAS_SIMPLIFY_PATH = "/api/cas/simplify"
+CAS_EXPAND_PATH = "/api/cas/expand"
+CAS_FACTOR_PATH = "/api/cas/factor"
+CAS_DERIVATIVE_PATH = "/api/cas/derivative"
+CAS_INTEGRAL_PATH = "/api/cas/integral"
+CAS_LIMIT_PATH = "/api/cas/limit"
+CAS_SOLVE_PATH = "/api/cas/solve"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -889,6 +896,276 @@ def _handle_stats_regression(handler):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_cas_op(handler, op):
+    """Shared body for every stateless POST /api/cas/<op> route (plan step
+    P19/S2 pulls this out of what was _handle_cas_simplify alone in P19/S1,
+    so /simplify, /expand and /factor -- added in P19/S3 -- share one
+    handler instead of three near-identical copies).
+
+    `op` is one of graphcalc.cas's own functions (simplify, expand, ...):
+    "expr" is handed to it exactly as the client sent it, and that function
+    owns every parsing/algebra decision -- see graphcalc.cas's own module
+    docstring for the full grammar/whitelist rule it shares with graphcalc.
+    calc.evaluate. A malformed body, a non-object body, a missing or
+    non-string "expr", or a graphcalc.calc.CalcError from `op` (bad
+    grammar, an unknown function call, or anything else parse_expr itself
+    rejects) is a JSON 400. The blanket catch-all below still backs up any
+    exception neither of those anticipates, the same "never a 500" rule
+    every other route already follows.
+    """
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        expr = payload.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            _send_json(handler, 400, {"error": "missing parameter: expr"})
+            return
+        try:
+            result = op(expr)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, {"result": result})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_cas_simplify(handler):
+    """POST /api/cas/simplify {"expr"} -> 200 JSON {"result": str} (plan
+    step P19/S1). See _handle_cas_op for the shared body this delegates to.
+    """
+    from graphcalc import cas
+
+    _handle_cas_op(handler, cas.simplify)
+
+
+def _handle_cas_expand(handler):
+    """POST /api/cas/expand {"expr"} -> 200 JSON {"result": str} (plan step
+    P19/S2). See _handle_cas_op for the shared body this delegates to.
+    """
+    from graphcalc import cas
+
+    _handle_cas_op(handler, cas.expand)
+
+
+def _handle_cas_factor(handler):
+    """POST /api/cas/factor {"expr"} -> 200 JSON {"result": str} (plan step
+    P19/S3). See _handle_cas_op for the shared body this delegates to.
+    """
+    from graphcalc import cas
+
+    _handle_cas_op(handler, cas.factor)
+
+
+def _handle_cas_derivative(handler):
+    """POST /api/cas/derivative {"expr", "var"} -> 200 JSON {"result": str}
+    (plan step P20/S1).
+
+    Unlike /simplify, /expand and /factor, this route takes a second body
+    key, "var", so it does not fit _handle_cas_op's single-"expr" shape --
+    hence this sibling handler instead of a fourth _handle_cas_op call. A
+    malformed body, a non-object body, or a missing or non-string "expr"
+    are rejected exactly as _handle_cas_op rejects them (same message:
+    "missing parameter: expr"); a missing or non-string "var" is rejected
+    the same way, with "missing parameter: var". Once both are strings,
+    graphcalc.cas.derivative owns every remaining parsing/algebra/guard
+    decision (including whether `var` is a valid identifier) -- a
+    graphcalc.calc.CalcError it raises becomes this route's own JSON 400.
+    The blanket catch-all below still backs up any exception neither of
+    those anticipates, the same "never a 500" rule every other route
+    already follows.
+    """
+    from graphcalc import cas
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        expr = payload.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            _send_json(handler, 400, {"error": "missing parameter: expr"})
+            return
+        var = payload.get("var")
+        if not isinstance(var, str) or not var.strip():
+            _send_json(handler, 400, {"error": "missing parameter: var"})
+            return
+        try:
+            result = cas.derivative(expr, var)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, {"result": result})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_cas_integral(handler):
+    """POST /api/cas/integral {"expr","var","lower","upper" (both optional)}
+    -> 200 JSON {"result": str} (plan step P20/S2).
+
+    Like /derivative, this route takes a second body key, "var", so it does
+    not fit _handle_cas_op's single-"expr" shape -- hence this sibling
+    handler. A malformed body, a non-object body, or a missing or
+    non-string "expr"/"var" are rejected exactly as _handle_cas_derivative
+    rejects them ("missing parameter: expr"/"missing parameter: var").
+    "lower" and "upper" are each optional and forwarded to graphcalc.cas.
+    integral exactly as the client sent them (whatever JSON type they
+    are) -- that function owns every remaining parsing/algebra/guard
+    decision, including rejecting a body that supplies exactly one of the
+    two, or a bound that is not a plain JSON number. A graphcalc.calc.
+    CalcError it raises becomes this route's own JSON 400. The blanket
+    catch-all below still backs up any exception neither of those
+    anticipates, the same "never a 500" rule every other route already
+    follows.
+    """
+    from graphcalc import cas
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        expr = payload.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            _send_json(handler, 400, {"error": "missing parameter: expr"})
+            return
+        var = payload.get("var")
+        if not isinstance(var, str) or not var.strip():
+            _send_json(handler, 400, {"error": "missing parameter: var"})
+            return
+        lower = payload.get("lower")
+        upper = payload.get("upper")
+        try:
+            result = cas.integral(expr, var, lower, upper)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, {"result": result})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_cas_limit(handler):
+    """POST /api/cas/limit {"expr","var","point","dir" (optional)} -> 200
+    JSON {"result": str} (plan step P20/S3).
+
+    Like /derivative and /integral, this route takes a second body key,
+    "var", so it does not fit _handle_cas_op's single-"expr" shape --
+    hence this sibling handler. A malformed body, a non-object body, or a
+    missing or non-string "expr"/"var" are rejected exactly as
+    _handle_cas_derivative rejects them ("missing parameter: expr"/
+    "missing parameter: var"). "point" is required and "dir" is optional;
+    both are forwarded to graphcalc.cas.limit exactly as the client sent
+    them (whatever JSON type they are) -- that function owns every
+    remaining parsing/algebra/guard decision, including rejecting a
+    missing/non-number "point" and a "dir" that is not None, "+" or "-".
+    A graphcalc.calc.CalcError it raises becomes this route's own JSON
+    400. The blanket catch-all below still backs up any exception neither
+    of those anticipates, the same "never a 500" rule every other route
+    already follows.
+    """
+    from graphcalc import cas
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        expr = payload.get("expr")
+        if not isinstance(expr, str) or not expr.strip():
+            _send_json(handler, 400, {"error": "missing parameter: expr"})
+            return
+        var = payload.get("var")
+        if not isinstance(var, str) or not var.strip():
+            _send_json(handler, 400, {"error": "missing parameter: var"})
+            return
+        point = payload.get("point")
+        dir_ = payload.get("dir")
+        try:
+            result = cas.limit(expr, var, point, dir_)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, {"result": result})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
+def _handle_cas_solve(handler):
+    """POST /api/cas/solve {"equation","var"} -> 200 JSON
+    {"solutions": [str, ...]} (plan step P21/S1).
+
+    Unlike /simplify, /expand and /factor, this route's first body key is
+    "equation" (not "expr") and its result key is "solutions" (a sorted
+    list, not a single "result" string) -- so it does not fit
+    _handle_cas_op's shape either, hence this sibling handler, built the
+    same way _handle_cas_derivative/_handle_cas_integral/_handle_cas_limit
+    are. A malformed body or a non-object body is a JSON 400 ("invalid
+    JSON body"); a missing or non-string "equation" is "missing parameter:
+    equation"; a missing or non-string "var" is "missing parameter: var" --
+    checked before "equation" is ever parsed, the same order
+    _handle_cas_derivative already uses. Once both are strings,
+    graphcalc.cas.solve owns every remaining parsing/algebra/guard decision
+    (splitting "equation" on "=", whether `var` is a valid identifier,
+    running sympy.solve()) -- a graphcalc.calc.CalcError it raises becomes
+    this route's own JSON 400. The blanket catch-all below still backs up
+    any exception neither of those anticipates, the same "never a 500"
+    rule every other route already follows.
+    """
+    from graphcalc import cas
+    from graphcalc.calc import CalcError
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        equation = payload.get("equation")
+        if not isinstance(equation, str) or not equation.strip():
+            _send_json(handler, 400, {"error": "missing parameter: equation"})
+            return
+        var = payload.get("var")
+        if not isinstance(var, str) or not var.strip():
+            _send_json(handler, 400, {"error": "missing parameter: var"})
+            return
+        try:
+            solutions = cas.solve(equation, var)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
+        _send_json(handler, 200, {"solutions": solutions})
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -912,6 +1189,13 @@ class Handler(BaseHTTPRequestHandler):
     - DELETE /api/lists/<name>  -> see _handle_lists_delete
     - POST /api/stats/onevar    -> see _handle_stats_onevar
     - POST /api/stats/regression -> see _handle_stats_regression
+    - POST /api/cas/simplify    -> see _handle_cas_simplify
+    - POST /api/cas/expand      -> see _handle_cas_expand
+    - POST /api/cas/factor      -> see _handle_cas_factor
+    - POST /api/cas/derivative  -> see _handle_cas_derivative
+    - POST /api/cas/integral    -> see _handle_cas_integral
+    - POST /api/cas/limit       -> see _handle_cas_limit
+    - POST /api/cas/solve       -> see _handle_cas_solve
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -963,6 +1247,27 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == STATS_REGRESSION_PATH:
             _handle_stats_regression(self)
+            return
+        if self.path == CAS_SIMPLIFY_PATH:
+            _handle_cas_simplify(self)
+            return
+        if self.path == CAS_EXPAND_PATH:
+            _handle_cas_expand(self)
+            return
+        if self.path == CAS_FACTOR_PATH:
+            _handle_cas_factor(self)
+            return
+        if self.path == CAS_DERIVATIVE_PATH:
+            _handle_cas_derivative(self)
+            return
+        if self.path == CAS_INTEGRAL_PATH:
+            _handle_cas_integral(self)
+            return
+        if self.path == CAS_LIMIT_PATH:
+            _handle_cas_limit(self)
+            return
+        if self.path == CAS_SOLVE_PATH:
+            _handle_cas_solve(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

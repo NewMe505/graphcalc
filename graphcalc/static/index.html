@@ -64,6 +64,24 @@
 
   <section id="tab-lists" class="tab-panel">
     <h2>Lists &amp; Statistics</h2>
+    <div id="list-grid"></div>
+    <div>
+      <label>List <select id="stats-list"></select></label>
+      <div id="stats-output"></div>
+    </div>
+    <div>
+      <label>Model
+        <select id="regression-model">
+          <option value="linear" selected>linear</option>
+          <option value="quadratic">quadratic</option>
+        </select>
+      </label>
+      <label>x <select id="regression-x"></select></label>
+      <label>y <select id="regression-y"></select></label>
+      <button type="button" id="regression-run">Run regression</button>
+      <div id="regression-output"></div>
+    </div>
+    <canvas id="stats-canvas" width="600" height="400"></canvas>
   </section>
 
   <section id="tab-cas" class="tab-panel">

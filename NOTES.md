@@ -1,5 +1,6 @@
 # Notes
 
+- M8 Asymptote fix, lists, one-var stats and regression merged by `scio build`: P34 passed, P15 failed, P15 passed, P16 passed, P17 passed; $23.7150.
 - M7 Graph analysis, value table and Graphs tab UI merged by `scio build`: P12 passed, P13 passed, P14 passed; $9.5168.
 - M6 Disk-persisted state and graph plot/window API merged by `scio build`: P9 passed, P10 passed, P11 passed; $9.2876.
 - M5 Number literals, decimal exacts, history and wrapping merged by `scio build`: P29 passed, P33 passed, P31 passed, P32 passed; $9.3290.
@@ -9,6 +10,116 @@
 - M1 Server skeleton, static UI shell and core evaluation merged by `scio build`: P1 passed, P2 passed, P3 passed, P4 failed, P4 failed, P4 passed; $16.4903.
 Working notes SCIO and humans leave for the next session. Newest first.
 
+- P20/S4 (2026-11-17): `_parse_bound` (`graphcalc/cas.py`), used by both
+  `integral()`'s `"lower"`/`"upper"` and `limit()`'s `"point"`, now also
+  accepts an expression string, not just a JSON number. `"oo"`, `"+oo"`,
+  `"-oo"` and the spelled-out `"infinity"`/`"+infinity"`/`"-infinity"`
+  (stripped of surrounding whitespace) are mapped straight to sympy's own
+  `oo`/`-oo` through a small lookup table, `_INFINITY_TOKENS`, checked
+  *before* the string is ever handed to this module's shared `_parse`:
+  `"oo"` is not one of `_rad_names()`'s whitelisted names, so `_parse("oo")`
+  would otherwise resolve it via `parse_expr`'s own `auto_symbol` fallback
+  into a free `Symbol('oo')`, not real infinity. Any other string -- `"pi"`,
+  `"2*pi"`, `"e"`, `"y"`, a malformed string such as `"x+"` -- is run
+  through `_parse` itself (the exact same grammar/whitelist `"expr"` goes
+  through, so the P20/S1 power-size hang guard inside `_parse` covers a
+  bound string too), and the parsed result must come back with
+  `free_symbols` empty: `"pi"`/`"2*pi"`/`"e"` resolve to a constant with no
+  free symbols and pass, `"y"` parses fine as a bare `Symbol` but is
+  rejected as not-a-number, and `"x+"` never parses at all (`GrammarError`/
+  `parse_expr` failure, both already turned into `CalcError` by `_parse`).
+  An empty-string bound raises `CalcError` too, for free, since `_parse`
+  itself already rejects an empty/whitespace-only string before
+  `free_symbols` is ever checked -- no separate empty-string check was
+  needed here. Two-sided-limit policy (unchanged by this step, restated
+  here since the planner note asked for it): `limit()`'s `"dir"` defaults
+  to `None`, which means sympy's own `dir="+-"` two-sided limit, not a
+  one-sided one picked arbitrarily; if sympy's two one-sided limits
+  disagree (`sign(x)` at `0`) or both agree on `zoo`/`nan` instead of a
+  real value (`"1/x"` at `0`), `limit()` raises `CalcError("limit does not
+  exist: ...")` rather than ever answering 200 with an undefined result.
+  Added `test_p20_symbolic_bounds_*` to `tests/test_p20_cas_calculus.py`:
+  `integral("sin(x)", "x", 0, "pi")` -> `"2"`, `limit("1/x", "x", "oo")`
+  and `limit("1/x", "x", "-oo")` -> `"0"` (both through the real HTTP route
+  and directly against `graphcalc.cas`), plus a `"y"` bound and a `"x+"`
+  bound each giving 400. P20/S1-S3 (derivative, integral, limit with
+  JSON-number-only bounds) were already done and passing coming into this
+  step; this step only extended `_parse_bound` and added its own tests --
+  no other file needed to change.
+- P18 (2026-11-17): Lists & Statistics tab UI. `graphcalc/static/index.html`,
+  `graphcalc/static/app.js`, `tests/test_p18_lists_ui.py`,
+  `tests/test_p18_lists_browser.py`.
+  - Added the nine ids PRODUCT.md's acceptance criteria (plus the planner
+    notes' implied regression inputs) need inside the existing `tab-lists`
+    panel: `list-grid`, `stats-list`, `stats-output`, `regression-model`
+    (`<select>`, `"linear"`/`"quadratic"`, linear selected by default),
+    `regression-x`, `regression-y`, `regression-run`, `regression-output`,
+    and a new 600x400 `stats-canvas` `<canvas>`. `regression-x`/
+    `regression-y`/`regression-run` are not named by any acceptance
+    criterion -- a regression needs two chosen lists and a trigger, and
+    nothing else in PRODUCT.md or the planner notes specifies how a user
+    picks them, so plain `<select>`s plus a button were added, mirroring
+    the Graphs tab's own pattern of plain inputs plus an explicit action
+    button.
+  - `app.js`'s `loadLists()` is the single source of truth for every
+    list-backed element on this tab: `GET /api/lists` for the names, then
+    one `GET /api/lists/<name>` per name in parallel (no serial waterfall),
+    rendering `list-grid` and filling `stats-list`/`regression-x`/
+    `regression-y` from the same response set, keeping each select's own
+    prior value selected if it still exists. Runs on `DOMContentLoaded` and
+    on every click of the `tab-lists` button (per planner notes: "Load
+    lists on page load and tab open").
+  - `statsRefreshOnevar()` fires only on `stats-list`'s own `change` event
+    -- POSTs `{"list": name}` to `/api/stats/onevar` and renders every
+    returned key as a `<dt>`/`<dd>` pair, collapsing an `{"exact",
+    "decimal"}` pair to just `exact` when the two already match (so `mean`
+    shows `3`, never `3 = 3`). `regressionRun()` fires only on
+    `regression-run`'s `click` -- POSTs `regression-model` plus the
+    *values* (never the names) of whichever lists `regression-x`/
+    `regression-y` hold, via `listsByName` (built by the same `loadLists()`
+    call, keyed by name, so no second round trip is needed to resolve a
+    chosen name back to its values). Both error paths show the response's
+    `error` string in the matching output element; neither throws past its
+    own `.catch`.
+  - `stats-canvas` is drawn only after a successful regression: `points`
+    (dots) and `curve` (one connected line) come straight from the
+    response, mapped into a window computed client-side from their
+    combined min/max plus a 10% margin (never a window the server
+    computes, since `/api/stats/regression` has no window concept of its
+    own) -- kept as a separate `statsToPixel`/`statsDrawAxes`/
+    `statsDrawPoints`/`statsDrawCurve` set rather than reusing the Graphs
+    tab's `graphToPixel`/etc., since this tab always draws a fixed data
+    set plus one fitted curve, never an arbitrary number of sampled
+    function series.
+  - Known limitation, not covered by any acceptance criterion: `stats-list`
+    has no blank placeholder option, so once `loadLists()` fills it with
+    exactly one name (e.g. just `L1`), the browser auto-selects it without
+    firing a `change` event -- `statsRefreshOnevar()` never runs on its own,
+    and `stats-output` stays empty until the user picks a *different* name
+    and back, or Playwright's own `select_option` (used by
+    `test_p18_browser_onevar`), which always dispatches `change` even when
+    the value is unchanged. A real single-list session would need an
+    explicit re-pick to see any statistics at all. Not fixed here --
+    PRODUCT.md's F3 wording ("choosing L1 in stats-list shows...") is
+    satisfied by the test as written, and fixing the underlying UX gap
+    (a placeholder option, or calling `statsRefreshOnevar()` once right
+    after `loadLists()` fills the select) would need its own test and is
+    product/builder work, not a docs change. Worth a follow-up plan step.
+  - Added `tests/test_p18_lists_ui.py`: the two static-content acceptance
+    criteria (all nine ids present exactly once with `stats-canvas`
+    confirmed as a real `<canvas>`, and `GET /static/app.js` containing all
+    three `/api/lists`/`/api/stats/onevar`/`/api/stats/regression` paths),
+    plus a check that the Graphs/Calculator tabs' own ids are untouched.
+    Added `tests/test_p18_lists_browser.py` (Playwright, real Chromium,
+    skipped -- never failed -- without one): F3 (`L1 [1,2,3,4,5]` in
+    `list-grid`, `n 5`/`mean 3` in `stats-output` after choosing `L1`) and
+    F4 (`L2 [2,4,6]` on `L1 [1,2,3]` linear regression shows `a = 2`/
+    `b = 0` in `regression-output`, and at least one non-zero-alpha pixel
+    on `stats-canvas`). Full suite: 429 passed, 4 skipped.
+  - No plan drift, no design question: additive UI wiring over three
+    already-shipped endpoints (`/api/lists` since P15, `/api/stats/onevar`
+    since P16, `/api/stats/regression` since P17), no change to any Python
+    module. Calculator and Graphs tab code untouched, per planner notes.
 - P15/S1 (2026-11-17): named lists CRUD over `/api/lists`. `graphcalc/lists.py`
   (new), `graphcalc/state.py`, `graphcalc/cli.py`, `tests/test_p15_lists.py`.
   - `graphcalc/lists.py` is the single shared definition of what a list name

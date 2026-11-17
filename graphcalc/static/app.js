@@ -548,4 +548,361 @@
     // plot -- consistent with "the page only draws what the API returns."
     graphWindowAction({ action: "standard" });
   }
+
+  // ---- Lists & Statistics tab: wired to /api/lists, /api/stats/onevar and
+  // /api/stats/regression (plan steps P18/S2 and P18/S3). Same as the
+  // Calculator and Graphs tabs above, the page only draws what the API
+  // returns -- no client-side math, ever: the regression fit itself (the
+  // coefficients, r2, "points" and "curve") always comes from the
+  // /api/stats/regression response, never computed here.
+  var LISTS_PATH = "/api/lists";
+  var STATS_ONEVAR_PATH = "/api/stats/onevar";
+  var STATS_REGRESSION_PATH = "/api/stats/regression";
+
+  var listsTabButton = document.querySelector('.tab-button[data-tab="tab-lists"]');
+  var listGrid = document.getElementById("list-grid");
+  var statsList = document.getElementById("stats-list");
+  var statsOutput = document.getElementById("stats-output");
+  var regressionModel = document.getElementById("regression-model");
+  var regressionX = document.getElementById("regression-x");
+  var regressionY = document.getElementById("regression-y");
+  var regressionRunButton = document.getElementById("regression-run");
+  var regressionOutput = document.getElementById("regression-output");
+  var statsCanvas = document.getElementById("stats-canvas");
+
+  if (listGrid && statsList && statsOutput) {
+    // Lists fetched by loadLists() below, keyed by name, so regressionRun()
+    // can read a chosen list's own values without a second round trip --
+    // regression-x/regression-y only ever offer names loadLists() just
+    // filled them with.
+    var listsByName = {};
+
+    var statsCtx = statsCanvas ? statsCanvas.getContext("2d") : null;
+
+    function listsShowStatsError(message) {
+      statsOutput.textContent = message || "";
+    }
+
+    // Same {"exact","decimal"} formatting rule calcFormatResult above
+    // already applies to a /api/calc/evaluate entry: "decimal" is shown
+    // alongside "exact" only when they actually differ, so an integer
+    // result such as mean=3 (exact "3", decimal "3") shows plainly as "3",
+    // never "3 = 3" or a raw "3.0". A plain (non-{exact,decimal}) value
+    // such as "n" is just stringified.
+    function statsFormatValue(value) {
+      if (value && typeof value === "object" && "exact" in value) {
+        if (value.decimal && value.decimal !== value.exact) {
+          return value.exact + " = " + value.decimal;
+        }
+        return value.exact;
+      }
+      return String(value);
+    }
+
+    function listsRenderGrid(lists) {
+      listGrid.innerHTML = "";
+      lists.forEach(function (entry) {
+        var block = document.createElement("div");
+        var heading = document.createElement("h3");
+        heading.textContent = entry.name;
+        block.appendChild(heading);
+        var valueList = document.createElement("ul");
+        (entry.values || []).forEach(function (value) {
+          var item = document.createElement("li");
+          item.textContent = value;
+          valueList.appendChild(item);
+        });
+        block.appendChild(valueList);
+        listGrid.appendChild(block);
+      });
+    }
+
+    // Rebuilds a <select>'s options from the current list names, keeping
+    // whatever name was already chosen selected when it still exists.
+    // loadLists() runs both on DOMContentLoaded and on every tab-lists
+    // click (below), so a second, slower-to-resolve call can refill
+    // regression-x/regression-y (or stats-list) after the user (or a test)
+    // already picked a value from the first call's options; without this,
+    // that refill would silently reset the picked value back to whichever
+    // name sorts first, same as any plain select.innerHTML = "" rebuild.
+    function listsFillSelect(select, lists) {
+      if (!select) {
+        return;
+      }
+      var previous = select.value;
+      select.innerHTML = "";
+      var kept = false;
+      lists.forEach(function (entry) {
+        var option = document.createElement("option");
+        option.value = entry.name;
+        option.textContent = entry.name;
+        select.appendChild(option);
+        if (entry.name === previous) {
+          kept = true;
+        }
+      });
+      if (kept) {
+        select.value = previous;
+      }
+    }
+
+    // GET /api/lists only returns names (plan step P15/S1) -- each list's
+    // own values come from a separate GET /api/lists/<name>, fetched in
+    // parallel so list-grid, stats-list, regression-x and regression-y all
+    // render/fill once, not one list at a time.
+    function loadLists() {
+      return fetch(LISTS_PATH)
+        .then(function (res) {
+          return res.json();
+        })
+        .then(function (data) {
+          var names = data.lists || [];
+          return Promise.all(
+            names.map(function (name) {
+              return fetch(LISTS_PATH + "/" + encodeURIComponent(name)).then(function (res) {
+                return res.json();
+              });
+            })
+          );
+        })
+        .then(function (lists) {
+          listsRenderGrid(lists);
+          listsFillSelect(statsList, lists);
+          listsFillSelect(regressionX, lists);
+          listsFillSelect(regressionY, lists);
+          listsByName = {};
+          lists.forEach(function (entry) {
+            listsByName[entry.name] = entry;
+          });
+        });
+    }
+
+    function statsRenderOutput(data) {
+      statsOutput.innerHTML = "";
+      var dl = document.createElement("dl");
+      Object.keys(data).forEach(function (key) {
+        var dt = document.createElement("dt");
+        dt.textContent = key;
+        var dd = document.createElement("dd");
+        dd.textContent = statsFormatValue(data[key]);
+        dl.appendChild(dt);
+        dl.appendChild(dd);
+      });
+      statsOutput.appendChild(dl);
+    }
+
+    // The stats-list dropdown's change handler: POSTs the chosen list to
+    // /api/stats/onevar and renders the returned statistics verbatim, or
+    // the JSON error message from a 400 (e.g. an empty list), into
+    // stats-output.
+    function statsRefreshOnevar() {
+      var name = statsList.value;
+      if (!name) {
+        statsOutput.innerHTML = "";
+        return;
+      }
+      fetch(STATS_ONEVAR_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ list: name }),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            listsShowStatsError(result.data.error || "error");
+            return;
+          }
+          statsRenderOutput(result.data);
+        })
+        .catch(function (err) {
+          listsShowStatsError(String(err));
+        });
+    }
+
+    statsList.addEventListener("change", statsRefreshOnevar);
+
+    // Renders /api/stats/regression's own "model", "coefficients" and "r2"
+    // into regression-output as plain "key = value" lines -- e.g. "a = 2"
+    // and "b = 0" -- rather than the <dt>/<dd> pairs statsRenderOutput uses
+    // above, so each coefficient reads as a single run of text rather than
+    // being split across two elements. statsFormatValue is reused for the
+    // normalised-number formatting rule even though this endpoint's own
+    // coefficients/r2 are already plain decimal strings (never the
+    // {"exact","decimal"} shape onevar returns): it just stringifies them
+    // unchanged, so sharing it costs nothing and keeps one formatting rule
+    // for the whole tab.
+    function statsRenderRegression(data) {
+      regressionOutput.innerHTML = "";
+      var lines = [];
+      if ("model" in data) {
+        lines.push("model = " + statsFormatValue(data.model));
+      }
+      var coefficients = data.coefficients || {};
+      Object.keys(coefficients).forEach(function (key) {
+        lines.push(key + " = " + statsFormatValue(coefficients[key]));
+      });
+      if ("r2" in data) {
+        lines.push("r2 = " + statsFormatValue(data.r2));
+      }
+      lines.forEach(function (line) {
+        var p = document.createElement("p");
+        p.textContent = line;
+        regressionOutput.appendChild(p);
+      });
+    }
+
+    // ---- stats-canvas drawing helpers: a local mirror of the Graphs tab's
+    // graphToPixel/graphDrawAxes/graphDrawSeries above, kept separate (not
+    // shared) since this block draws a fixed set of data points plus one
+    // fitted curve from the regression response, not an arbitrary number of
+    // sampled function series.
+
+    function statsToPixel(win, x, y) {
+      var px = ((x - win.xmin) / (win.xmax - win.xmin)) * statsCanvas.width;
+      var py =
+        statsCanvas.height -
+        ((y - win.ymin) / (win.ymax - win.ymin)) * statsCanvas.height;
+      return [px, py];
+    }
+
+    function statsDrawAxes(win) {
+      statsCtx.strokeStyle = "#999999";
+      statsCtx.lineWidth = 1;
+      if (win.ymin <= 0 && win.ymax >= 0) {
+        var xAxis = statsToPixel(win, 0, 0);
+        statsCtx.beginPath();
+        statsCtx.moveTo(0, xAxis[1]);
+        statsCtx.lineTo(statsCanvas.width, xAxis[1]);
+        statsCtx.stroke();
+      }
+      if (win.xmin <= 0 && win.xmax >= 0) {
+        var yAxis = statsToPixel(win, 0, 0);
+        statsCtx.beginPath();
+        statsCtx.moveTo(yAxis[0], 0);
+        statsCtx.lineTo(yAxis[0], statsCanvas.height);
+        statsCtx.stroke();
+      }
+    }
+
+    // Draws the regression's own "points" ([[x, y], ...] string pairs, in
+    // the request's input order) as small filled dots.
+    function statsDrawPoints(win, points) {
+      statsCtx.fillStyle = "#1a73e8";
+      points.forEach(function (pair) {
+        var point = statsToPixel(win, parseFloat(pair[0]), parseFloat(pair[1]));
+        statsCtx.beginPath();
+        statsCtx.arc(point[0], point[1], 4, 0, 2 * Math.PI);
+        statsCtx.fill();
+      });
+    }
+
+    // Draws the regression's own "curve" (50 [x, y] pairs spanning
+    // min(x)..max(x), already in x order) as a single connected line -- the
+    // fitted curve itself, never recomputed here.
+    function statsDrawCurve(win, curve) {
+      statsCtx.strokeStyle = "#d93025";
+      statsCtx.lineWidth = 2;
+      statsCtx.beginPath();
+      curve.forEach(function (pair, index) {
+        var point = statsToPixel(win, parseFloat(pair[0]), parseFloat(pair[1]));
+        if (index === 0) {
+          statsCtx.moveTo(point[0], point[1]);
+        } else {
+          statsCtx.lineTo(point[0], point[1]);
+        }
+      });
+      statsCtx.stroke();
+    }
+
+    // Sizes the window to the data itself -- the min/max of every x and y
+    // value across both "points" and "curve" -- with a 10% margin on each
+    // side so a point never lands exactly on the canvas edge. Falls back to
+    // a 1-unit margin when every x (or every y) is equal, which "points"
+    // alone could do even though a real regression's own x range cannot
+    // (regression() already rejects fewer than two distinct x values).
+    function statsComputeWindow(points, curve) {
+      var xs = [];
+      var ys = [];
+      points.concat(curve).forEach(function (pair) {
+        xs.push(parseFloat(pair[0]));
+        ys.push(parseFloat(pair[1]));
+      });
+      var xmin = Math.min.apply(null, xs);
+      var xmax = Math.max.apply(null, xs);
+      var ymin = Math.min.apply(null, ys);
+      var ymax = Math.max.apply(null, ys);
+      var xPad = (xmax - xmin) * 0.1 || 1;
+      var yPad = (ymax - ymin) * 0.1 || 1;
+      return {
+        xmin: xmin - xPad,
+        xmax: xmax + xPad,
+        ymin: ymin - yPad,
+        ymax: ymax + yPad,
+      };
+    }
+
+    function statsRenderRegressionPlot(data) {
+      statsCtx.clearRect(0, 0, statsCanvas.width, statsCanvas.height);
+      var points = data.points || [];
+      var curve = data.curve || [];
+      var win = statsComputeWindow(points, curve);
+      statsDrawAxes(win);
+      statsDrawCurve(win, curve);
+      statsDrawPoints(win, points);
+    }
+
+    // The regression-run button: POSTs the chosen model and the chosen
+    // x/y lists' own values (never list names -- /api/stats/regression
+    // takes the raw value arrays, the same shape PUT /api/lists/<name>
+    // takes) to /api/stats/regression, then renders the coefficients and
+    // draws the fit -- both straight from the response.
+    function regressionRun() {
+      var xEntry = listsByName[regressionX.value];
+      var yEntry = listsByName[regressionY.value];
+      if (!xEntry || !yEntry) {
+        regressionOutput.textContent = "choose an x list and a y list";
+        return;
+      }
+      fetch(STATS_REGRESSION_PATH, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: regressionModel.value,
+          x: xEntry.values,
+          y: yEntry.values,
+        }),
+      })
+        .then(function (res) {
+          return res.json().then(function (data) {
+            return { ok: res.ok, data: data };
+          });
+        })
+        .then(function (result) {
+          if (!result.ok) {
+            regressionOutput.textContent = result.data.error || "error";
+            return;
+          }
+          statsRenderRegression(result.data);
+          if (statsCtx) {
+            statsRenderRegressionPlot(result.data);
+          }
+        })
+        .catch(function (err) {
+          regressionOutput.textContent = String(err);
+        });
+    }
+
+    if (regressionRunButton) {
+      regressionRunButton.addEventListener("click", regressionRun);
+    }
+
+    document.addEventListener("DOMContentLoaded", loadLists);
+    if (listsTabButton) {
+      listsTabButton.addEventListener("click", loadLists);
+    }
+  }
 })();

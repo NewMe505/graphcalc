@@ -45,7 +45,8 @@ curl -s -X POST http://127.0.0.1:8000/api/state/reset
 
 The UI shell is served from two routes:
 - `GET /` -- `text/html`, the tab page (`tab-calculator`, `tab-graphs`,
-  `tab-lists`, `tab-cas`, and a `graph-canvas` canvas on the Graphs tab).
+  `tab-lists`, `tab-cas`, a `graph-canvas` canvas on the Graphs tab, and a
+  `stats-canvas` canvas on the Lists & Statistics tab).
 - `GET /static/<name>` -- the page's own `.js`/`.css`/`.html` files with an
   explicit content type (e.g. `application/javascript`, `text/css`). Any
   other path, including a traversal attempt, answers a JSON 404, never a 500.
@@ -435,6 +436,143 @@ curl -s -X POST http://127.0.0.1:8000/api/stats/regression \
 # {"error": "x and y must have the same length"}
 ```
 
+`POST /api/cas/simplify`, `POST /api/cas/expand` and `POST /api/cas/factor`
+each take body `{"expr": str}` and answer 200 with `{"result": str}`:
+`/simplify` runs sympy's `simplify()`, `/expand` runs `expand()`, and
+`/factor` runs `factor()`. `expr` is parsed with the same restricted
+grammar `POST /api/calc/evaluate` uses (no Python comparison/bitwise/
+shift/floor-division operators, the same numeric-literal and call-name
+rules), so an undefined name such as `x` becomes a free symbol the same
+way it would in a calculator expression, and every result is rendered
+with `^` for a power, never sympy's own `**`. Unlike `/api/calc/evaluate`,
+these three routes are stateless: no stored ans, variables, functions or
+lists are read, and there is no `rad`/`deg` mode. A missing, empty or
+non-string `"expr"`, a non-object body, invalid JSON, or an `expr` the
+parser itself rejects (bad grammar, an unknown function call, a dangling
+operator such as `"x+"`) each answer 400 with `{"error": ...}` -- never a
+500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/cas/simplify \
+  -H "Content-Type: application/json" -d '{"expr": "(x^2-1)/(x-1)"}'
+# {"result": "x + 1"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/expand \
+  -H "Content-Type: application/json" -d '{"expr": "(x+1)^2"}'
+# {"result": "x^2 + 2*x + 1"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/factor \
+  -H "Content-Type: application/json" -d '{"expr": "x^2-5x+6"}'
+# {"result": "(x - 3)*(x - 2)"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/factor \
+  -H "Content-Type: application/json" -d '{"expr": "x+"}'
+# {"error": "invalid expression: x+"}
+```
+
+`POST /api/cas/derivative`, `POST /api/cas/integral` and `POST /api/cas/limit`
+round out the CAS calculus set next to `/simplify`/`/expand`/`/factor`, same
+stateless rules (no stored ans/variables/functions/lists, no `rad`/`deg`
+mode) and the same `expr` grammar/whitelist:
+
+- `/derivative` -- body `{"expr": str, "var": str}` answers 200
+  `{"result": str}`: runs sympy's `diff()` with respect to `var`
+  (`{"expr": "x*sin(x)", "var": "x"}` -> `"x*cos(x) + sin(x)"`). `var` must
+  be a plain ASCII identifier (e.g. `"x"`, never `"x+1"` or `"2"`); anything
+  else is a 400 before `expr` is even parsed.
+- `/integral` -- body `{"expr": str, "var": str, "lower", "upper"}`, both
+  bounds optional. With neither, the indefinite integral:
+  `{"expr": "x^2", "var": "x"}` -> `"x^3/3"`. With both, the definite one:
+  `{"expr": "x^2", "var": "x", "lower": 0, "upper": 1}` -> `"1/3"`. Supplying
+  only one of `lower`/`upper` is a 400 (a definite integral needs both ends
+  or neither); an integral sympy cannot find a closed form for answers 400
+  `"no closed form"` rather than echoing the input back as if it were an
+  answer.
+- `/limit` -- body `{"expr": str, "var": str, "point", "dir"}`, `dir`
+  optional. With no `dir`, sympy's own two-sided limit:
+  `{"expr": "sin(x)/x", "var": "x", "point": 0}` -> `"1"`. `"+"` or `"-"`
+  for a one-sided limit: `{"expr": "1/x", "var": "x", "point": 0, "dir":
+  "+"}` -> `"oo"`. Any other `dir` (including a non-string) is a 400 before
+  `expr` is even parsed. A limit sympy cannot resolve -- it raises (the two
+  one-sided limits disagree) or hands back its own `zoo`/`nan` instead of a
+  value (the two-sided limit of `"1/x"` at `0`) -- is also a 400, never a
+  200 echoing an undefined result.
+
+`lower`, `upper` and `point` each accept either a plain JSON number (a
+`bool`, or a non-finite float such as `NaN`/`Infinity`, is rejected) or an
+expression string such as `"pi"` or `"oo"`/`"-oo"` (the spelled-out
+`"infinity"`/`"-infinity"` also work): `"oo"`/`"-oo"` map straight to
+sympy's own infinity, and any other string is parsed with the same
+grammar/whitelist `expr` itself uses and must come back with no free
+symbols -- `"pi"` and `"2*pi"` work, a bare name such as `"y"` or a
+malformed string such as `"x+"` are both 400s. `var` must be a plain ASCII
+identifier for all three routes, the same rule `/derivative` already
+applies. Never a 500.
+
+`POST /api/cas/solve` rounds out the CAS set, next to `/simplify`,
+`/expand`, `/factor`, `/derivative`, `/integral` and `/limit`. Its body
+`{"equation": str, "var": str}` answers 200 `{"solutions": [str, ...]}` --
+a sorted list of
+exact "^"-notation solution strings, not a single `"result"`.
+`"equation"` is split on `"="` first: zero `"="` means the whole string is
+taken to equal `0` (`{"equation": "x^2+1", "var": "x"}` ->
+`{"solutions": ["-I", "I"]}`, sympy already finding the complex roots with
+no extra domain hint); exactly one `"="` means `"lhs=rhs"`
+(`{"equation": "x^2=4", "var": "x"}` -> `{"solutions": ["-2", "2"]}`,
+`{"equation": "2y+3=7", "var": "y"}` -> `{"solutions": ["2"]}`); more than
+one `"="` (e.g. `"x=y=2"`) is a 400. Each side is parsed with the same
+`expr` grammar/whitelist every other CAS route uses, and `var` must be a
+plain ASCII identifier, same rule as `/derivative`/`/integral`/`/limit` --
+a missing or non-string `"var"` (or `"equation"`) is a 400 before anything
+is parsed. Never a 500.
+
+```
+curl -s -X POST http://127.0.0.1:8000/api/cas/derivative \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "x*sin(x)", "var": "x"}'
+# {"result": "x*cos(x) + sin(x)"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/integral \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "x^2", "var": "x", "lower": 0, "upper": 1}'
+# {"result": "1/3"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/integral \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "sin(x)", "var": "x", "lower": 0, "upper": "pi"}'
+# {"result": "2"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/limit \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "sin(x)/x", "var": "x", "point": 0}'
+# {"result": "1"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/limit \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "1/x", "var": "x", "point": 0, "dir": "+"}'
+# {"result": "oo"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/limit \
+  -H "Content-Type: application/json" \
+  -d '{"expr": "1/x", "var": "x", "point": "oo"}'
+# {"result": "0"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/solve \
+  -H "Content-Type: application/json" \
+  -d '{"equation": "x^2=4", "var": "x"}'
+# {"solutions": ["-2", "2"]}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/solve \
+  -H "Content-Type: application/json" \
+  -d '{"equation": "x^2+1", "var": "x"}'
+# {"solutions": ["-I", "I"]}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/solve \
+  -H "Content-Type: application/json" \
+  -d '{"equation": "2y+3=7", "var": "y"}'
+# {"solutions": ["2"]}
+```
+
 The Calculator tab (`tab-calculator`) is wired to that API, not just a
 static mock: `#calc-input` / `#calc-mode` / `#calc-submit` POST to
 `/api/calc/evaluate` on click or on Enter in the input, `#calc-history` and
@@ -486,6 +624,34 @@ paths; every plotted point, window, analysis result and table cell the
 Graphs tab shows comes from one of these four endpoints, never computed in
 the browser.
 
+The Lists & Statistics tab (`tab-lists`) is wired to `/api/lists`,
+`/api/stats/onevar` and `/api/stats/regression`, not just the static
+`list-grid`/`stats-canvas` shell. `loadLists()` runs once on page load and
+again every time the Lists & Statistics tab button is clicked: it calls
+`GET /api/lists` for the stored names, then one `GET /api/lists/<name>` per
+name in parallel, and renders each list's own values into `#list-grid` (one
+heading plus its values) while filling `#stats-list`, `#regression-x` and
+`#regression-y` with those same names, keeping whichever name was already
+selected in each if it still exists. Changing `#stats-list` POSTs
+`{"list": name}` to `/api/stats/onevar` and renders every returned key as a
+`<dt>`/`<dd>` pair into `#stats-output`; an `{"exact","decimal"}` pair (e.g.
+`mean`, `sx`) shows as `exact` alone when the two match, or `exact =
+decimal` when they differ, so `L1 [1,2,3,4,5]`'s `mean` shows plainly as
+`3`. A 400 (e.g. an empty list) shows its `error` message in `#stats-output`
+instead. `#regression-run` POSTs `#regression-model`'s value plus the
+*values* (not the names) of whichever lists are chosen in
+`#regression-x`/`#regression-y` to `/api/stats/regression`, and renders the
+response's `model`, each coefficient, and `r2` as `"key = value"` lines in
+`#regression-output` (e.g. `a = 2`, `b = 0`) -- or its `error` message on a
+400, or `"choose an x list and a y list"` if either select is still empty.
+A successful regression also draws on `#stats-canvas`: the response's own
+`points` (dots) and `curve` (one connected line) are mapped into a window
+fit client-side to their combined min/max with a 10% margin, never a window
+computed by the server. All of it lives in `graphcalc/static/app.js`, same
+plain `fetch()` on relative paths as the Calculator and Graphs tabs; every
+list value, statistic, coefficient and plotted point the tab shows comes
+from one of those three endpoints, never computed in the browser.
+
 A long result, value or error never widens the page: `graphcalc/static/
 style.css` sets `overflow-wrap: anywhere` (plus `word-break: break-word` for
 older browsers) on `body`, inherited by every tab panel, so an unbroken run
@@ -495,8 +661,9 @@ same value stored by `"a:=10^1000"` in `#calc-vars`, a function body such as
 `#calc-error`, or a long value/error in the Graphs tab's `#graph-table`
 cells or its analyze/error status line -- wraps inside its own block instead
 of scrolling the whole page sideways. The rule lives on `body`, not on any
-one tab's elements, so the Lists & Statistics and CAS tabs get the same
-protection for any long text they render later.
+one tab's elements, so the Lists & Statistics tab's own `#list-grid`/
+`#stats-output`/`#regression-output` text already inherits the same
+protection, and the CAS tab will too once it renders anything.
 
 ## Develop
 

@@ -400,6 +400,101 @@
   distinct x values for the model (fewer than 2 for `"linear"`, fewer than
   3 for `"quadratic"`), or every `y` value equal (`r2` undefined) each
   answer 400, never a 500. Added `tests/test_p17_regression.py`.
+- Lists & Statistics tab UI (P18): `GET /` now ships a working Lists &
+  Statistics tab, not just the static shell. `graphcalc/static/index.html`
+  gains nine new ids inside `tab-lists`: `list-grid`, `stats-list`,
+  `stats-output`, `regression-model` (a `<select>` defaulting to
+  `"linear"`, with `"quadratic"` as the other option), `regression-x`,
+  `regression-y`, `regression-run`, `regression-output`, and a new
+  600x400 `stats-canvas` `<canvas>`. `graphcalc/static/app.js` wires all
+  three endpoints: `loadLists()` runs on page load and on every click of
+  the Lists & Statistics tab button, fetching `GET /api/lists` then one
+  `GET /api/lists/<name>` per name in parallel to fill `list-grid` (each
+  list's own heading plus its values) and the `stats-list`/`regression-x`/
+  `regression-y` selects, keeping a still-valid prior selection; a
+  `change` on `stats-list` POSTs `{"list": name}` to `/api/stats/onevar`
+  and renders every returned key as a `<dt>`/`<dd>` pair in `stats-output`
+  (an `{"exact","decimal"}` pair collapses to just `exact` when the two
+  match, e.g. `mean` shows `3`, not `3 = 3`); `regression-run` POSTs
+  `regression-model`'s value plus the chosen `regression-x`/`regression-y`
+  lists' own *values* (not their names) to `/api/stats/regression` and
+  renders `model`/each coefficient/`r2` as `"key = value"` lines in
+  `regression-output` (e.g. `a = 2`, `b = 0`), then draws the response's
+  `points` (dots) and `curve` (one connected line) on `stats-canvas`, with
+  the drawing window fit client-side to their combined min/max plus a 10%
+  margin. A 400 from either `/api/stats/onevar` or `/api/stats/regression`
+  shows its `error` message in the matching output element instead. The
+  Calculator and Graphs tabs' own ids and wiring are unchanged. Added
+  `tests/test_p18_lists_ui.py` (both static-content acceptance criteria:
+  the nine required ids, with `stats-canvas` confirmed as an actual
+  `<canvas>`, and `GET /static/app.js` mentioning all three
+  `/api/lists`/`/api/stats/*` paths) and `tests/test_p18_lists_browser.py`
+  (real-Chromium, Playwright-driven: F3 -- `L1 [1,2,3,4,5]` appears in
+  `list-grid` and choosing it in `stats-list` shows `n 5`/`mean 3` in
+  `stats-output` -- and F4 -- a linear regression of `L2 [2,4,6]` on
+  `L1 [1,2,3]` shows `a = 2`/`b = 0` in `regression-output` and leaves at
+  least one non-blank pixel on `stats-canvas`; skips, never fails, without
+  Playwright/Chromium).
+- `POST /api/cas/simplify`, `/api/cas/expand` and `/api/cas/factor` (P19):
+  stateless CAS algebra over sympy. Each takes body `{"expr": str}` and
+  answers 200 with `{"result": str}`: `/simplify` runs `sympy.simplify()`
+  (`"(x^2-1)/(x-1)"` -> `"x + 1"`), `/expand` runs `sympy.expand()`
+  (`"(x+1)^2"` -> `"x^2 + 2*x + 1"`), and `/factor` runs `sympy.factor()`
+  (`"x^2-5x+6"` -> `"(x - 3)*(x - 2)"`). `expr` is parsed with the same
+  restricted grammar `POST /api/calc/evaluate` uses (`graphcalc.grammar.
+  check_grammar`/`normalize_numbers`, the same `rad`-mode name whitelist
+  for calls, implicit multiplication), so an undefined name such as `x`
+  becomes a free symbol and every result renders with `^` for a power,
+  never sympy's own `**`. Unlike `/api/calc/evaluate`, these routes read
+  no stored ans/variables/functions/lists and have no `rad`/`deg` mode --
+  a CAS request carries no state at all. A missing/empty/non-string
+  `"expr"`, a non-object body, invalid JSON, or anything the parser itself
+  rejects (bad grammar, an unknown function call, a dangling operator such
+  as `"x+"`) answers 400 with a JSON `{"error": ...}`, never a 500. Added
+  `graphcalc/cas.py` and `tests/test_p19_cas.py`.
+- `POST /api/cas/derivative`, `/api/cas/integral` and `/api/cas/limit`
+  (P20): the rest of the CAS calculus set, next to P19's algebra routes in
+  `graphcalc/cas.py`. `/derivative` takes `{"expr", "var"}` and runs
+  `sympy.diff()` (`"x*sin(x)"` by `"x"` -> `"x*cos(x) + sin(x)"`).
+  `/integral` takes `{"expr", "var"}` plus optional `"lower"`/`"upper"`:
+  with neither, the indefinite integral (`"x^2"` by `"x"` ->  `"x^3/3"`);
+  with both, the definite one (`0`/`1` -> `"1/3"`); supplying only one of
+  the two is a 400, and an integral sympy cannot find a closed form for
+  answers 400 `"no closed form"` rather than echoing the input back.
+  `/limit` takes `{"expr", "var", "point"}` plus optional `"dir"`: with no
+  `"dir"`, sympy's own two-sided `dir="+-"` (`"sin(x)/x"` at `0` -> `"1"`);
+  `"+"`/`"-"` for a one-sided limit (`"1/x"` at `0` with `"+"` -> `"oo"`);
+  any other `"dir"` (including a non-string) is a 400 before `"expr"` is
+  even parsed. A limit sympy cannot resolve -- it raises (the two one-sided
+  limits disagree) or hands back its own `zoo`/`nan` instead of a value
+  (the two-sided limit of `"1/x"` at `0`) -- is also a 400, never a 200
+  echoing an undefined result. `"var"` must be a plain ASCII identifier
+  string for all three routes. `"lower"`/`"upper"`/`"point"` each accept
+  either a JSON number (bool and non-finite float rejected) or an
+  expression string such as `"pi"` or `"oo"`/`"-oo"` (`"infinity"`/
+  `"-infinity"` also work) -- `"oo"`/`"-oo"` map straight to sympy's own
+  infinity, any other string is parsed with the same grammar/whitelist
+  `"expr"` itself uses and must come back with no free symbols (so `"pi"`
+  and `"2*pi"` work, `"y"` and a malformed string such as `"x+"` are both
+  400s), letting `integral("sin(x)", "x", 0, "pi")` -> `"2"` and
+  `limit("1/x", "x", "oo")` -> `"0"` both work. The P20/S1 power-size guard
+  (`graphcalc.limits.is_power_too_large`, the same "guard against hangs, as
+  in P28" fix) runs inside the shared `_parse`, so it also covers every
+  bound string, not just `"expr"`. Added
+  `tests/test_p20_cas_calculus.py`.
+- `POST /api/cas/solve` (P21): takes `{"equation", "var"}` and answers
+  `{"solutions": [str, ...]}`, a sorted list of exact "^"-notation
+  solution strings, next to P19/P20's other CAS routes in
+  `graphcalc/cas.py`. `"equation"` is split on a single `"="` (zero `"="`
+  means the whole string is taken to equal `0`; more than one, e.g.
+  `"x=y=2"`, is a 400) and `sympy.solve()` runs against `lhs - rhs`:
+  `"x^2=4"` for `"x"` -> `["-2", "2"]`; `"x^2+1"` for `"x"` ->
+  `["-I", "I"]` (sympy already finds complex roots with no extra domain
+  hint); `"2y+3=7"` for `"y"` -> `["2"]`. `"var"` must be a plain ASCII
+  identifier string, the same rule `/derivative`, `/integral` and
+  `/limit` already apply; a missing or non-string `"var"` (or
+  `"equation"`) is a 400, never a 500. Added
+  `tests/test_p21_cas_solve.py`.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

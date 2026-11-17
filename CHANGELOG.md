@@ -349,6 +349,36 @@
   `CalcState.get_list`/`set_list`/`delete_list` in `graphcalc/state.py`,
   `do_PUT` plus the four `_handle_lists_*` handlers in `graphcalc/cli.py`,
   and `tests/test_p15_lists.py`.
+- Named lists survive a restart and `POST /api/state/reset` (P15/S2):
+  `CalcState`'s on-disk loader now validates the `"lists"` field entry by
+  entry, not just as a whole -- any name not matching `LIST_NAME_RE`, any
+  value that is not a list, or any list containing a non-string item is
+  dropped on load instead of being resurfaced through `GET /api/lists` or
+  crashing a later evaluation (extending P26's "stored data never breaks
+  later evaluations" rule to a hand-edited or pre-P15 state file). CRUD
+  through `/api/lists` already wrote through atomically and `reset()`
+  already emptied `"lists"` since P9, so no further change was needed for
+  a list to survive `python -m graphcalc --state S` being stopped and
+  started again, or to be emptied by `POST /api/state/reset`.
+- Lists in expressions (P15/S3): `POST /api/calc/evaluate` now resolves a
+  stored list by name -- with `L1` set to `["1","2","3"]` via `PUT
+  /api/lists/L1`, `{"expr": "2*L1+1"}` answers 200 `exact` `"[3, 5, 7]"`.
+  Any expression that references, as a whole token, at least one stored
+  list name is evaluated elementwise instead of as a single scalar; a
+  plain number or a stored variable/function that is not itself one of
+  the referenced lists broadcasts across every index, and two lists used
+  together must share the same length or the request is a 400 (`"lists
+  have mismatched lengths: ..."`). The first element whose own evaluation
+  hits a `domain_error` short-circuits the whole result into that one
+  `domain_error`, the same shape a plain scalar domain error already has;
+  `decimal` and `complex` are always `null` for a list result, since
+  neither has a single rendering for a list, and referencing `ans` right
+  after leaves it undefined, the same as with no history at all. An
+  expression that references no stored list name behaves exactly as
+  before. `graphcalc/calc.py`'s `evaluate()` gained a `lists` parameter
+  (new `_evaluate_list_expression`/`_list_lengths_or_raise` helpers), and
+  `graphcalc/cli.py`'s calc-evaluate handler now passes
+  `lists=_state(handler).lists()` into every call.
 
 ### Security
 - Hardened the `/static/<name>` route against path traversal: reject a NUL

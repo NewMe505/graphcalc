@@ -509,6 +509,23 @@ malformed string such as `"x+"` are both 400s. `var` must be a plain ASCII
 identifier for all three routes, the same rule `/derivative` already
 applies. Never a 500.
 
+`POST /api/cas/solve` rounds out the CAS set, next to `/simplify`,
+`/expand`, `/factor`, `/derivative`, `/integral` and `/limit`. Its body
+`{"equation": str, "var": str}` answers 200 `{"solutions": [str, ...]}` --
+a sorted list of
+exact "^"-notation solution strings, not a single `"result"`.
+`"equation"` is split on `"="` first: zero `"="` means the whole string is
+taken to equal `0` (`{"equation": "x^2+1", "var": "x"}` ->
+`{"solutions": ["-I", "I"]}`, sympy already finding the complex roots with
+no extra domain hint); exactly one `"="` means `"lhs=rhs"`
+(`{"equation": "x^2=4", "var": "x"}` -> `{"solutions": ["-2", "2"]}`,
+`{"equation": "2y+3=7", "var": "y"}` -> `{"solutions": ["2"]}`); more than
+one `"="` (e.g. `"x=y=2"`) is a 400. Each side is parsed with the same
+`expr` grammar/whitelist every other CAS route uses, and `var` must be a
+plain ASCII identifier, same rule as `/derivative`/`/integral`/`/limit` --
+a missing or non-string `"var"` (or `"equation"`) is a 400 before anything
+is parsed. Never a 500.
+
 ```
 curl -s -X POST http://127.0.0.1:8000/api/cas/derivative \
   -H "Content-Type: application/json" \
@@ -539,6 +556,21 @@ curl -s -X POST http://127.0.0.1:8000/api/cas/limit \
   -H "Content-Type: application/json" \
   -d '{"expr": "1/x", "var": "x", "point": "oo"}'
 # {"result": "0"}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/solve \
+  -H "Content-Type: application/json" \
+  -d '{"equation": "x^2=4", "var": "x"}'
+# {"solutions": ["-2", "2"]}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/solve \
+  -H "Content-Type: application/json" \
+  -d '{"equation": "x^2+1", "var": "x"}'
+# {"solutions": ["-I", "I"]}
+
+curl -s -X POST http://127.0.0.1:8000/api/cas/solve \
+  -H "Content-Type: application/json" \
+  -d '{"equation": "2y+3=7", "var": "y"}'
+# {"solutions": ["2"]}
 ```
 
 The Calculator tab (`tab-calculator`) is wired to that API, not just a

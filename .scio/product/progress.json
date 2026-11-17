@@ -113,6 +113,22 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/39",
       "merged_commit": "000d6f732b2742eed5d0abc8e207b63088a8578b",
       "usd": 9.5168
+    },
+    {
+      "id": "M8",
+      "title": "Asymptote fix, lists, one-var stats and regression",
+      "status": "done",
+      "branch": "milestone/8",
+      "features": [
+        "P34",
+        "P15",
+        "P16",
+        "P17"
+      ],
+      "pr_number": 45,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/45",
+      "merged_commit": "c2ac89fa3e478cb813730e98ad46521984cbbc3f",
+      "usd": 23.715
     }
   ],
   "features": [
@@ -259,32 +275,32 @@
     {
       "id": "P15",
       "description": "Named lists that can be created, read, updated and deleted through /api/lists, and used in expressions.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "c1d40bfd7a9186d567d0c2b45186174ecb8f63b3",
+      "thread": "build-graphcalc-m4-p15-a2",
+      "tier": "T1",
+      "issue": 42,
+      "usd": 8.4779
     },
     {
       "id": "P16",
       "description": "POST /api/stats/onevar takes {\"list\":name} and answers n (integer) plus mean, median, sum, sx, sigma_x, min, q1, q3 and max, each {\"exact\",\"decimal\"} (TI quartile method).",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "fc4e5639b482bb8cfa44e80e47a5969b2eaad96d",
+      "thread": "build-graphcalc-m4-p16-a1",
+      "tier": "T1",
+      "issue": 43,
+      "usd": 3.3832
     },
     {
       "id": "P17",
       "description": "POST /api/stats/regression takes {\"model\":\"linear\"|\"quadratic\",\"x\":[str],\"y\":[str]} and answers {\"model\",\"coefficients\":{\"a\",\"b\"[,\"c\"]},\"r2\",\"points\":[[x,y]],\"curve\":[[x,y]]}. Coefficients and r2 are decimal strings with 12 significant digits.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "7aebd9aefb018c9ff212299a85094538a76b4b28",
+      "thread": "build-graphcalc-m4-p17-a1",
+      "tier": "T1",
+      "issue": 44,
+      "usd": 3.7597
     },
     {
       "id": "P18",
@@ -449,13 +465,13 @@
     {
       "id": "P34",
       "description": "Bug #40 fix: the Graphs tab never joins a curve across a vertical asymptote; the two branches stay separate, and a steep continuous curve is still drawn whole.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "71cf8ba9b7295fa21bffd958f111f9bb4ab50b4d",
+      "thread": "build-graphcalc-m4-p34-a1",
+      "tier": "T1",
+      "issue": 41,
+      "usd": 1.6077
     }
   ],
-  "updated": "2026-11-17T15:23:01+00:00"
+  "updated": "2026-11-17T18:00:52+00:00"
 }

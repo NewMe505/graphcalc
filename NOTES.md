@@ -1,5 +1,6 @@
 # Notes
 
+- M8 Asymptote fix, lists, one-var stats and regression merged by `scio build`: P34 passed, P15 failed, P15 passed, P16 passed, P17 passed; $23.7150.
 - M7 Graph analysis, value table and Graphs tab UI merged by `scio build`: P12 passed, P13 passed, P14 passed; $9.5168.
 - M6 Disk-persisted state and graph plot/window API merged by `scio build`: P9 passed, P10 passed, P11 passed; $9.2876.
 - M5 Number literals, decimal exacts, history and wrapping merged by `scio build`: P29 passed, P33 passed, P31 passed, P32 passed; $9.3290.

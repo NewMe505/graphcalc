@@ -156,6 +156,8 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 ### P18: The Lists & Statistics tab is wired to the list and statistics endpoints.
 - [ ] GET / contains elements with ids list-grid, stats-list, stats-output, regression-model, regression-output and a canvas with id stats-canvas
 - [ ] GET /static/app.js contains the paths /api/lists, /api/stats/onevar and /api/stats/regression
+- [ ] Owner revision (2026-11-17), checked in a real browser: with L1 [1,2,3,4,5] stored through PUT /api/lists/L1 and the page loaded, the Lists & Statistics tab shows L1 with its five values inside list-grid; choosing L1 in stats-list shows its one-variable results in stats-output, with n 5 and mean 3
+- [ ] Owner revision (2026-11-17), checked in a real browser: with L1 [1,2,3] and L2 [2,4,6] stored, running a linear regression of L2 on L1 from the tab shows a = 2 and b = 0 in regression-output and draws the points and the line on stats-canvas (at least one canvas pixel is no longer blank)
 
 ### P19: POST /api/cas/simplify, /expand and /factor take {"expr"} and answer {"result"} in exact form with ^ for powers.
 - [ ] simplify "(x^2-1)/(x-1)" returns result "x + 1"
@@ -176,6 +178,8 @@ A local graphing calculator inspired by the TI-Nspire CX CAS. A Python HTTP serv
 ### P22: The CAS tab is wired to every CAS endpoint.
 - [ ] GET / contains elements with ids cas-input, cas-var, cas-op, cas-submit and cas-output
 - [ ] GET /static/app.js contains the paths /api/cas/simplify, /api/cas/expand, /api/cas/factor, /api/cas/derivative, /api/cas/integral, /api/cas/limit and /api/cas/solve
+- [ ] Owner revision (2026-11-17), checked in a real browser: on the CAS tab, typing "(x+1)^2" into cas-input, choosing expand in cas-op and clicking cas-submit shows "x^2 + 2*x + 1" in cas-output; choosing derivative with cas-var "x" for "x*sin(x)" shows "x*cos(x) + sin(x)"
+- [ ] Owner revision (2026-11-17), checked in a real browser: a malformed expression such as "x^^2" shows an error message in cas-output, and a valid submit made right after it still shows its result
 
 ## Quality bar (release gate)
 - Tests run with pytest (python -m pytest) and pytest-cov; line coverage is at least 85%

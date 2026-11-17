@@ -1,5 +1,6 @@
 # Notes
 
+- M6 Disk-persisted state and graph plot/window API merged by `scio build`: P9 passed, P10 passed, P11 passed; $9.2876.
 - M5 Number literals, decimal exacts, history and wrapping merged by `scio build`: P29 passed, P33 passed, P31 passed, P32 passed; $9.3290.
 - M4 Evaluator hardening: names, Unicode, freezes, literals merged by `scio build`: P27 failed, P27 passed, P28 passed, P29 skipped (reopened by the owner's 2026-11-15 revision and fixed in M5 -- see the P29/S1 and P29/S2 notes below), P30 passed; $13.4294.
 - M3 Evaluator grammar, naming and robustness fixes merged by `scio build`: P23 passed, P24 passed, P25 passed, P26 failed, P26 failed, P26 failed, P26 passed; $30.6874.

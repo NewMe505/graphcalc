@@ -19,7 +19,27 @@ The remaining tests are the same "never a 500" checks
 tests/test_p16_onevar.py already runs for its own POST route, adapted to
 this route's own request shape: a non-string/unparseable "x"/"y" entry, an
 unknown "model" (plan step P17/S2's own acceptance line), and a non-object
-body are all 400 with an "error" key.
+body are all 400 with an "error" key. test_regression_400_non_object_body
+in particular sends a non-list "x" (a bare string) rather than a
+structurally-wrong top-level body -- the node id is kept as-is rather than
+renamed, since this attempt's own tests_added already cites it under its
+existing name.
+
+Plan step P17/S3 adds two more things neither of the above fully proves:
+
+test_regression_linear_unsorted_x_input_order_and_curve_range proves
+"points" holds the data pairs *in input order* (not sorted) and "curve"
+spans min(x)..max(x) *as a range*, not just xs[0]..xs[-1] -- both
+acceptance bullets 1 and 2 above use already-sorted x, so curve[0]/
+curve[-1] matching points[0]/points[-1] there does not actually rule out
+an implementation that (wrongly) sampled from the first/last x entries
+instead of the true min/max.
+
+test_regression_400_validation (parametrized) covers every 400 case S3
+names explicitly that was not already exercised above: an empty "x", a
+list of non-string (JSON number) entries, too few distinct x values for
+each model (linear needs >=2, quadratic needs >=3), and SS_tot == 0 (every
+y value equal).
 """
 
 import threading
@@ -74,6 +94,19 @@ def test_regression_linear_exact_fit(base):
 
 
 # ---- acceptance bullet 2: quadratic exact fit ----
+
+
+def test_regression_linear_unsorted_x_input_order_and_curve_range(base):
+    status, body = _post(
+        base,
+        "/api/stats/regression",
+        {"model": "linear", "x": ["3", "1", "2"], "y": ["6", "2", "4"]},
+    )
+    assert status == 200, body
+    assert body["points"] == [["3", "6"], ["1", "2"], ["2", "4"]], body
+    assert len(body["curve"]) == 50, body
+    assert body["curve"][0] == ["1", "2"], body
+    assert body["curve"][-1] == ["3", "6"], body
 
 
 def test_regression_quadratic_exact_fit(base):
@@ -136,5 +169,29 @@ def test_regression_400_non_object_body(base):
 
 def test_regression_400_missing_keys(base):
     status, body = _post(base, "/api/stats/regression", {})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+# ---- plan step P17/S3's own validation list, each case not already hit above ----
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        # "a list is empty ... is not a list of strings": empty "x".
+        {"model": "linear", "x": [], "y": []},
+        # "... or not a list of strings": entries are JSON numbers, not strings.
+        {"model": "linear", "x": [1, 2, 3], "y": [2, 4, 6]},
+        # "too few distinct x values for the model (fewer than 2 for linear ...)".
+        {"model": "linear", "x": ["1", "1", "1"], "y": ["1", "2", "3"]},
+        # "... fewer than 3 for quadratic".
+        {"model": "quadratic", "x": ["1", "1", "2", "2"], "y": ["1", "2", "3", "4"]},
+        # "SS_tot is 0": every y value equal.
+        {"model": "linear", "x": ["1", "2", "3"], "y": ["5", "5", "5"]},
+    ],
+)
+def test_regression_400_validation(base, payload):
+    status, body = _post(base, "/api/stats/regression", payload)
     assert status == 400, body
     assert "error" in body, body

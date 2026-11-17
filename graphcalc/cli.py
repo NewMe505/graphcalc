@@ -77,6 +77,23 @@ checking it against graphcalc.lists.LIST_NAME_RE; a malformed name, a
 malformed body, or an invalid "values" entry is a 400, never a 500 or a
 404 -- 404 is reserved for a well-formed name that is simply not a stored
 list.
+
+POST /api/stats/onevar (plan step P16/S1) lives next to the list CRUD
+routes above -- see _handle_stats_onevar, which reads body["list"] (a
+stored list name) through the same CalcState.get_list the GET /api/lists/
+<name> route already uses, then defers the actual statistics to
+graphcalc.stats.onevar(). The response is {"n": int, "mean", "median",
+"sum", "sx", "sigma_x", "min", "q1", "q3", "max"}, each of the latter nine
+an {"exact", "decimal"} pair (graphcalc.numfmt.format_decimal at 12
+significant digits for "decimal"); "sx"/"sigma_x" are the sample/
+population standard deviations, and "q1"/"q3" are the TI quartile
+method's lower/upper-half medians (see graphcalc.stats's own module
+docstring for the exact rule). Unlike GET /api/lists/<name>, an undefined
+list name here is a 400, not a 404 -- so is a missing "list" key or a
+stored list that is empty (never actually possible through PUT /api/lists/
+<name>'s own validation, but checked anyway rather than trusting a
+hand-edited state file): this route's only successful response is a full
+statistics summary, so there is no well-formed "empty" result to 200 with.
 """
 
 import argparse
@@ -101,6 +118,7 @@ GRAPH_ANALYZE_PATH = "/api/graph/analyze"
 GRAPH_TABLE_PATH = "/api/graph/table"
 LISTS_PATH = "/api/lists"
 LISTS_PREFIX = "/api/lists/"
+STATS_ONEVAR_PATH = "/api/stats/onevar"
 
 # The static UI shell: index.html plus plain CSS/JS, shipped next to this module.
 STATIC_DIR = pathlib.Path(__file__).resolve().parent / "static"
@@ -757,6 +775,51 @@ def _handle_lists_delete(handler, segment):
         _send_json(handler, 400, {"error": f"request failed: {exc}"})
 
 
+def _handle_stats_onevar(handler):
+    """POST /api/stats/onevar {"list": name} -> stats.onevar's dict, 200
+    JSON (plan step P16/S1).
+
+    "list" must be a non-empty string naming a stored list -- a missing
+    "list" key, a non-string value, a name graphcalc.state.CalcState.
+    get_list does not recognize, or (only reachable through a hand-edited
+    state file, never through PUT /api/lists/<name> itself) a stored but
+    empty list are all a 400, never the 404 GET /api/lists/<name> itself
+    would give for an unknown name -- this route has no "well-formed but
+    not found" response to give, only a statistics summary or an error.
+    Everything else is handed to graphcalc.stats.onevar() unchanged; any
+    exception it raises (including the IndexError a one-element list's
+    undefined TI quartile halves raise -- see graphcalc.stats's own module
+    docstring) is caught by the blanket catch-all below, same as every
+    other route's "never a 500" rule.
+    """
+    from graphcalc import stats
+
+    try:
+        try:
+            payload = _read_json_body(handler)
+        except ValueError:
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        if not isinstance(payload, dict):
+            _send_json(handler, 400, {"error": "invalid JSON body"})
+            return
+        name = payload.get("list")
+        if not isinstance(name, str) or not name:
+            _send_json(handler, 400, {"error": "missing parameter: list"})
+            return
+        values = _state(handler).get_list(name)
+        if values is None:
+            _send_json(handler, 400, {"error": f"no such list: {name}"})
+            return
+        if not values:
+            _send_json(handler, 400, {"error": "list is empty"})
+            return
+        result = stats.onevar(values)
+        _send_json(handler, 200, result)
+    except Exception as exc:  # catch-all: this endpoint must never answer with a 500
+        _send_json(handler, 400, {"error": f"request failed: {exc}"})
+
+
 class Handler(BaseHTTPRequestHandler):
     """The product's only HTTP handler: health check, UI shell, static assets.
 
@@ -778,6 +841,7 @@ class Handler(BaseHTTPRequestHandler):
     - GET /api/lists/<name>     -> see _handle_lists_get_one
     - PUT /api/lists/<name>     -> see _handle_lists_put
     - DELETE /api/lists/<name>  -> see _handle_lists_delete
+    - POST /api/stats/onevar    -> see _handle_stats_onevar
     - anything else          -> 404 JSON {"error": ...}, never a 500
     """
 
@@ -823,6 +887,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if self.path == GRAPH_TABLE_PATH:
             _handle_graph_table(self)
+            return
+        if self.path == STATS_ONEVAR_PATH:
+            _handle_stats_onevar(self)
             return
         _send_json(self, 404, {"error": f"not found: {self.path}"})
 

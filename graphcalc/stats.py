@@ -1,15 +1,20 @@
-"""One-variable statistics for POST /api/stats/onevar (plan step P16/S1).
+"""One-variable statistics for POST /api/stats/onevar (plan steps P16/S1,
+P16/S2).
 
 onevar(values) is the pure computation graphcalc/cli.py's
 _handle_stats_onevar hands a stored list's values to, after reading them
 out of the same graphcalc.state.CalcState the P15 list routes already use.
-`values` is the stored list's values exactly as graphcalc.lists.
+`values` is ordinarily the stored list's values exactly as graphcalc.lists.
 validate_list_values left them: a non-empty list of strings, each one a
 calculator expression already known to parse (but never evaluated) by
 graphcalc.calc.evaluate -- the same contract every expression that
 references a stored list (e.g. "2*L1+1") already relies on. Neither this
 module nor its caller ever substitutes the evaluated result in a stored
-value's place; _to_exact_number below does its own parsing.
+value's place; _to_exact_number below does its own parsing. An empty
+`values` -- never stored through PUT /api/lists/<name> itself, but
+reachable through a hand-edited state file -- raises CalcError("list is
+empty") (plan step P16/S2) rather than being computed on; see onevar()'s
+own docstring below.
 
 Each entry is first turned into an exact sympy number by _to_exact_number:
 a plain numeric literal ("1", "-3", "1.5", "3/2") is parsed with sympy's
@@ -62,6 +67,7 @@ not what produces that form.
 
 from sympy import Rational, nsimplify, simplify, sqrt, sympify
 
+from graphcalc.calc import CalcError
 from graphcalc.numfmt import format_decimal
 
 
@@ -131,16 +137,24 @@ def _ti_halves(sorted_numbers: list) -> tuple:
 def onevar(values: list) -> dict:
     """Compute one-variable statistics for a stored list's values.
 
-    `values` is a non-empty list of stored list-entry strings (see this
-    module's own docstring for the contract graphcalc/cli.py's
-    _handle_stats_onevar relies on before calling this -- it is this
-    function's caller's job to reject an empty, missing or undefined list
-    before ever calling onevar(), never this function's).
+    `values` is expected to be a non-empty list of stored list-entry
+    strings (see this module's own docstring for the contract graphcalc/
+    cli.py's _handle_stats_onevar relies on before calling this -- it is
+    still this handler's job to reject a missing or undefined list before
+    ever calling onevar(), since there is no values list at all in those
+    cases). An empty `values` -- reachable through a hand-edited state
+    file even though PUT /api/lists/<name> itself never stores one, see
+    graphcalc.lists.validate_list_values -- raises CalcError("list is
+    empty") here instead of being left to _handle_stats_onevar's own
+    catch-all to turn whatever ZeroDivisionError/IndexError the division
+    by n below would otherwise raise into a less specific 400.
 
     Returns {"n": int, "mean", "median", "sum", "sx", "sigma_x", "min",
     "q1", "q3", "max"}, each of the latter nine an {"exact","decimal"}
     pair (see _stat).
     """
+    if not values:
+        raise CalcError("list is empty")
     numbers = [_to_exact_number(value) for value in values]
     n = len(numbers)
     sorted_numbers = sorted(numbers)

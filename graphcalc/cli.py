@@ -78,7 +78,7 @@ malformed body, or an invalid "values" entry is a 400, never a 500 or a
 404 -- 404 is reserved for a well-formed name that is simply not a stored
 list.
 
-POST /api/stats/onevar (plan step P16/S1) lives next to the list CRUD
+POST /api/stats/onevar (plan steps P16/S1, P16/S2) lives next to the list CRUD
 routes above -- see _handle_stats_onevar, which reads body["list"] (a
 stored list name) through the same CalcState.get_list the GET /api/lists/
 <name> route already uses, then defers the actual statistics to
@@ -777,22 +777,28 @@ def _handle_lists_delete(handler, segment):
 
 def _handle_stats_onevar(handler):
     """POST /api/stats/onevar {"list": name} -> stats.onevar's dict, 200
-    JSON (plan step P16/S1).
+    JSON (plan steps P16/S1, P16/S2).
 
     "list" must be a non-empty string naming a stored list -- a missing
-    "list" key, a non-string value, a name graphcalc.state.CalcState.
-    get_list does not recognize, or (only reachable through a hand-edited
-    state file, never through PUT /api/lists/<name> itself) a stored but
-    empty list are all a 400, never the 404 GET /api/lists/<name> itself
-    would give for an unknown name -- this route has no "well-formed but
-    not found" response to give, only a statistics summary or an error.
-    Everything else is handed to graphcalc.stats.onevar() unchanged; any
-    exception it raises (including the IndexError a one-element list's
-    undefined TI quartile halves raise -- see graphcalc.stats's own module
-    docstring) is caught by the blanket catch-all below, same as every
-    other route's "never a 500" rule.
+    "list" key, a non-string value, a name graphcalc.lists.
+    validate_list_name rejects (plan step P16/S2: reused here, the same
+    check PUT/GET/DELETE /api/lists/<name> already apply to a path-derived
+    name), a name graphcalc.state.CalcState.get_list does not recognize, or
+    (only reachable through a hand-edited state file, never through PUT
+    /api/lists/<name> itself) a stored but empty list -- the latter raised
+    as CalcError by graphcalc.stats.onevar itself, not checked here -- are
+    all a 400, never the 404 GET /api/lists/<name> itself would give for an
+    unknown name -- this route has no "well-formed but not found" response
+    to give, only a statistics summary or an error. Everything else is
+    handed to graphcalc.stats.onevar() unchanged; any exception it raises
+    (including the IndexError a one-element list's undefined TI quartile
+    halves raise -- see graphcalc.stats's own module docstring) is caught
+    by the blanket catch-all below, same as every other route's "never a
+    500" rule.
     """
     from graphcalc import stats
+    from graphcalc.calc import CalcError
+    from graphcalc.lists import validate_list_name
 
     try:
         try:
@@ -807,14 +813,20 @@ def _handle_stats_onevar(handler):
         if not isinstance(name, str) or not name:
             _send_json(handler, 400, {"error": "missing parameter: list"})
             return
+        try:
+            validate_list_name(name)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
+            return
         values = _state(handler).get_list(name)
         if values is None:
             _send_json(handler, 400, {"error": f"no such list: {name}"})
             return
-        if not values:
-            _send_json(handler, 400, {"error": "list is empty"})
+        try:
+            result = stats.onevar(values)
+        except CalcError as exc:
+            _send_json(handler, 400, {"error": str(exc)})
             return
-        result = stats.onevar(values)
         _send_json(handler, 200, result)
     except Exception as exc:  # catch-all: this endpoint must never answer with a 500
         _send_json(handler, 400, {"error": f"request failed: {exc}"})

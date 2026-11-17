@@ -23,6 +23,17 @@ test_onevar_400_undefined_list_name, test_onevar_400_missing_list_key, and
 test_onevar_400_empty_list (the last one through a hand-written state file,
 since PUT /api/lists/<name> itself never lets a client store an empty
 list -- see graphcalc.lists.validate_list_values).
+
+F3 (plan step P16/S2): the same acceptance bullet, proven again under the
+exact test names/scenarios that step's plan describes --
+test_onevar_rejects_missing_key (body {}), test_onevar_rejects_undefined_name
+(a list name, 'L9', that is never defined), and test_onevar_rejects_empty_list
+(calling graphcalc.stats.onevar([]) directly and asserting it raises
+graphcalc.calc.CalcError, since P15 never lets a client PUT an empty list
+over HTTP in the first place -- see that function's own module docstring).
+These are kept alongside the test_onevar_400_* tests above rather than
+replacing them: both prove the same behavior, just through different
+routes (direct unit call vs. the state-file-backed HTTP route).
 """
 
 import json
@@ -30,6 +41,7 @@ import threading
 
 import pytest
 
+from graphcalc.calc import CalcError
 from graphcalc.cli import build_server
 from graphcalc.history import StateBackedHistoryStore
 from graphcalc.state import CalcState
@@ -153,3 +165,31 @@ def test_onevar_400_non_object_body(base):
     status, body = _post(base, "/api/stats/onevar", {"list": 5})
     assert status == 400, body
     assert "error" in body, body
+
+
+# ---- plan step P16/S2: the same three 400 cases, under the exact test
+# names/scenarios that step's plan describes ----
+
+
+def test_onevar_rejects_missing_key(base):
+    status, body = _post(base, "/api/stats/onevar", {})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_onevar_rejects_undefined_name(base):
+    status, body = _post(base, "/api/stats/onevar", {"list": "L9"})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_onevar_rejects_empty_list():
+    """PUT /api/lists/<name> never lets a client store an empty list (see
+    test_onevar_400_empty_list above), so the only way to prove
+    graphcalc.stats.onevar's own empty-list guard (plan step P16/S2) is to
+    call it directly, the same way the planner notes for this step describe.
+    """
+    from graphcalc import stats
+
+    with pytest.raises(CalcError):
+        stats.onevar([])

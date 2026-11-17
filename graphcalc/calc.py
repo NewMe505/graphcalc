@@ -344,6 +344,118 @@ def _referenced_names(expr: str) -> set:
     return {text for group, text in _tokenize(expr) if group == "IDENT"}
 
 
+def _list_lengths_or_raise(lists: dict, list_names: list[str]) -> int:
+    """Return the shared length of every list in `list_names`, or raise
+    CalcError when they are not all the same length (plan step P15/S3:
+    "Lists of different lengths give a 400 client error.").
+
+    `list_names` is always non-empty and every name in it is always a key
+    of `lists` -- evaluate() only ever builds `list_names` by intersecting
+    `lists.keys()` with the names `expr` actually references, so this never
+    has to guard against a missing key.
+    """
+    lengths = {name: len(lists[name]) for name in list_names}
+    distinct = set(lengths.values())
+    if len(distinct) > 1:
+        detail = ", ".join(f"{name}={lengths[name]}" for name in list_names)
+        raise CalcError(f"lists have mismatched lengths: {detail}")
+    return distinct.pop()
+
+
+def _evaluate_list_expression(
+    expr: str,
+    mode: str,
+    last_entry: dict | None,
+    variables: dict | None,
+    functions: dict | None,
+    symbols: list[str] | None,
+    lists: dict,
+    list_names: list[str],
+) -> dict:
+    """Evaluate `expr` elementwise over every stored list name in
+    `list_names` (plan step P15/S3: "2*L1+1" with L1 = [1, 2, 3] -> exact
+    "[3, 5, 7]").
+
+    A stored list's values are plain, unevaluated strings -- graphcalc.
+    lists.validate_list_values only ever checked that each one *parses*,
+    and graphcalc.state.CalcState.set_list stores them verbatim (P26:
+    stored data must never break a later evaluation just by being stored).
+    That is exactly the shape a plain stored variable's value already has
+    (sans srepr), so rather than re-deriving sympy objects and substituting
+    them into one parsed tree by hand, this simply calls evaluate() again,
+    once per index, with every name in `list_names` rebound as an ordinary
+    variable holding that index's raw value string instead of left in
+    `lists`. `_rebuild_stored_value` then parses it with plain sympify()
+    the same way an unparseable stored *variable*'s value already would;
+    a list value that no longer parses raises CalcError from that
+    recursive call the same way any other bad expression does, so it is
+    the usual 400, never a 500.
+
+    Passing `lists=None` on the recursive call (never re-passing `lists`
+    itself) is what stops this from re-entering this same elementwise
+    branch for every single index: once a name is rebound as a plain
+    variable for one index, evaluate() no longer finds it in `lists` at
+    all for that call.
+
+    Combining a list with a plain scalar -- a literal number in `expr`, or
+    a stored variable/function that is not itself one of `list_names` --
+    needs no special case: that value is simply the same at every index,
+    which already reads as broadcasting it across the list. Two lists of
+    the same length combine elementwise the same way, each at its own
+    index; `_list_lengths_or_raise` rejects two lists of different lengths
+    before any element is evaluated.
+
+    The first element whose own evaluation sets `domain_error` (e.g. "1/L1"
+    when some entry of L1 is "0") short-circuits the loop and is reported
+    as this call's own `domain_error` -- exact/decimal/complex all None,
+    the same shape a single domain error already has -- rather than trying
+    to represent a list with one missing entry.
+
+    On success, `exact` is "[" + each element's own `exact` string (already
+    in this calculator's existing exact string form) joined by ", " + "]"
+    -- e.g. "[3, 5, 7]". `decimal`, `complex`, and the private
+    "_result_srepr" are always None: a Python list has no single decimal or
+    complex rendering, and no sympy srepr() a later "ans" could safely
+    rebuild from -- referencing "ans" right after a list evaluation raises
+    "ans is undefined" instead of resolving to anything, the same as "ans"
+    with no history at all (graphcalc.state.CalcState's own `_is_valid_ans`
+    already treats a non-string "srepr" as no stored answer, so this never
+    crashes, just leaves "ans" undefined).
+    """
+    length = _list_lengths_or_raise(lists, list_names)
+    exacts = []
+    for index in range(length):
+        element_variables = dict(variables) if variables else {}
+        for name in list_names:
+            element_variables[name] = lists[name][index]
+        element_result = evaluate(
+            expr,
+            mode,
+            last_entry=last_entry,
+            variables=element_variables,
+            functions=functions,
+            symbols=symbols,
+        )
+        if element_result["domain_error"] is not None:
+            return {
+                "expr": expr,
+                "exact": None,
+                "decimal": None,
+                "complex": None,
+                "domain_error": element_result["domain_error"],
+                "_result_srepr": None,
+            }
+        exacts.append(element_result["exact"])
+    return {
+        "expr": expr,
+        "exact": "[" + ", ".join(exacts) + "]",
+        "decimal": None,
+        "complex": None,
+        "domain_error": None,
+        "_result_srepr": None,
+    }
+
+
 def evaluate(
     expr: str,
     mode: str = "rad",
@@ -351,6 +463,7 @@ def evaluate(
     variables: dict | None = None,
     functions: dict | None = None,
     symbols: list[str] | None = None,
+    lists: dict | None = None,
 ) -> dict:
     """Parse and evaluate `expr`, returning the calc/evaluate response dict.
 
@@ -468,6 +581,18 @@ def evaluate(
     param always wins over a stored variable of the same name when a
     function's own body is being parsed to define it.
 
+    `lists` is a name -> list[str] mapping (graphcalc.state's CalcState.
+    lists(), typically; plan step P15/S3). When `expr` references, as a
+    whole token, at least one name that is a key of `lists`, this function
+    hands off to _evaluate_list_expression instead of evaluating `expr`
+    itself: see that function's own docstring for the full elementwise
+    rule (broadcasting a scalar, combining two same-length lists,
+    rejecting two different-length lists with CalcError, and the response
+    shape -- exact "[3, 5, 7]", decimal/complex/"_result_srepr" all None).
+    When `expr` references no name in `lists` at all (including when
+    `lists` is None or empty, the default), this function behaves exactly
+    as it did before `lists` existed.
+
     Before any of that, graphcalc.grammar.check_grammar(expr) runs a
     pre-parse grammar gate (plan step P23/S1, Bug #5 fix): parse_expr's own
     Python-flavoured tokenizer would otherwise accept Python comparison
@@ -545,6 +670,21 @@ def evaluate(
             "domain_error": DOMAIN_ERROR_TOO_LARGE,
             "_result_srepr": None,
         }
+
+    # List-aware path (plan step P15/S3): only when `expr` references, as
+    # a whole token (never as a substring -- the same rule _referenced_names
+    # already applies to "ans" and every stored variable/function name),
+    # at least one name that is also a key of `lists`. Sorted so a
+    # mismatched-lengths CalcError's message is deterministic. An `expr`
+    # that uses no list at all -- including every call site that never
+    # passes `lists` in the first place -- falls straight through to the
+    # unchanged code below, exactly as before this feature existed.
+    if lists:
+        list_names = sorted(name for name in _referenced_names(expr) if name in lists)
+        if list_names:
+            return _evaluate_list_expression(
+                expr, mode, last_entry, variables, functions, symbols, lists, list_names
+            )
 
     local_dict = _deg_names() if mode == "deg" else _rad_names()
     stored_srepr = None

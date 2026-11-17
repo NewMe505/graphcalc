@@ -43,6 +43,20 @@ test_lists_persist_non_dict_lists_field_allows_evaluation proves the same
 rule for the coarser case where the whole "lists" field is not even a
 dict. test_lists_persist_calcstate_coerce is a fast, server-free unit check
 of _coerce_lists_dict directly, on the same hand-written bad entries.
+
+F4 (PRODUCT.md, plan step P15/S3): "With L1 = [1,2,3], evaluating
+"2*L1+1" returns exact "[3, 5, 7]"." test_lists_evaluate_scalar_broadcast
+proves exactly that example through the real POST /api/calc/evaluate
+route. test_lists_evaluate_two_lists_elementwise proves "L1+L1" ->
+"[2, 4, 6]" (two same-length lists combine elementwise, not just a list
+with a literal scalar). test_lists_evaluate_mismatched_lengths_400 proves
+two differently-sized lists used together is a 400, never a 500 or a
+best-effort partial answer. test_lists_evaluate_regression_plain_expr_
+unchanged and test_lists_evaluate_regression_stored_variable_unchanged are
+the required regression check: an expression that uses no list at all --
+a plain expression, and one that references a previously stored plain
+variable -- must evaluate exactly as it did before this step, through the
+same server that now also has a stored list sitting unused in its state.
 """
 
 import json
@@ -468,3 +482,78 @@ def test_lists_persist_calcstate_coerce(tmp_path):
 
     state = CalcState(str(path))
     assert state.lists() == {"L1": ["1", "2", "3"]}, state.lists()
+
+
+# ---- F4: a stored list is usable in /api/calc/evaluate ----
+
+
+def test_lists_evaluate_scalar_broadcast(base):
+    """PRODUCT.md's own example: L1 = [1, 2, 3], "2*L1+1" -> exact
+    "[3, 5, 7]" -- the literal scalars "2" and "1" broadcast across every
+    element of L1.
+    """
+    status, body = _put(base, "/api/lists/L1", {"values": ["1", "2", "3"]})
+    assert status == 200, body
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "2*L1+1"})
+    assert status == 200, body
+    assert body["exact"] == "[3, 5, 7]", body
+    assert body["domain_error"] is None, body
+
+
+def test_lists_evaluate_two_lists_elementwise(base):
+    """Two lists of the same length (here, the same list used twice)
+    combine elementwise, not as some other broadcast or cross-product:
+    L1 = [1, 2, 3], "L1+L1" -> "[2, 4, 6]".
+    """
+    status, body = _put(base, "/api/lists/L1", {"values": ["1", "2", "3"]})
+    assert status == 200, body
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "L1+L1"})
+    assert status == 200, body
+    assert body["exact"] == "[2, 4, 6]", body
+
+
+def test_lists_evaluate_mismatched_lengths_400(base):
+    """Two different-length lists combined in one expression is a 400,
+    never a 500 or a truncated/best-effort answer.
+    """
+    status, body = _put(base, "/api/lists/L1", {"values": ["1", "2", "3"]})
+    assert status == 200, body
+    status, body = _put(base, "/api/lists/L2", {"values": ["4", "5"]})
+    assert status == 200, body
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "L1+L2"})
+    assert status == 400, body
+    assert "error" in body, body
+
+
+def test_lists_evaluate_regression_plain_expr_unchanged(base):
+    """A plain expression that references no list at all must evaluate
+    exactly as it did before this step existed -- even on a server that
+    does have an (unreferenced) stored list sitting in its state.
+    """
+    status, body = _put(base, "/api/lists/L1", {"values": ["1", "2", "3"]})
+    assert status == 200, body
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "1+1"})
+    assert status == 200, body
+    assert body["exact"] == "2", body
+    assert body["decimal"] == "2", body
+
+
+def test_lists_evaluate_regression_stored_variable_unchanged(base):
+    """An expression that references a previously stored plain variable
+    (never a list) must also evaluate exactly as before, alongside a
+    stored list it never mentions.
+    """
+    status, body = _put(base, "/api/lists/L1", {"values": ["1", "2", "3"]})
+    assert status == 200, body
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "a:=5"})
+    assert status == 200, body
+    assert body["exact"] == "5", body
+
+    status, body = _post(base, "/api/calc/evaluate", {"expr": "a+1"})
+    assert status == 200, body
+    assert body["exact"] == "6", body

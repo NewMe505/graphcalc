@@ -333,6 +333,15 @@ def _handle_calc_evaluate(handler):
     never a 500 (calc.evaluate turns sympy's BadArgumentsError into a
     CalcError).
 
+    `lists=_state(handler).lists()` is passed into every one of the three
+    calc.evaluate calls above (plan step P15/S3), the same way `variables`
+    and `functions` already are: an expr/rhs that references a stored list
+    name (e.g. "2*L1+1") is evaluated elementwise instead, exact
+    "[3, 5, 7]" -- see calc.evaluate's own docstring and
+    calc._evaluate_list_expression for the full rule. An expr/rhs that
+    references no list name at all behaves exactly as it did before this
+    feature existed.
+
     Everything above is wrapped in a catch-all: any exception this function
     did not anticipate (e.g. something calc.evaluate's own try/except does
     not cover) is still turned into a JSON 400, never left to propagate into
@@ -379,6 +388,7 @@ def _handle_calc_evaluate(handler):
                     last_entry=_state(handler).ans(),
                     variables=_state(handler).variable_entries(),
                     functions=_state(handler).function_entries(),
+                    lists=_state(handler).lists(),
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
@@ -407,6 +417,7 @@ def _handle_calc_evaluate(handler):
                     variables=_state(handler).variable_entries(),
                     functions=_state(handler).function_entries(),
                     symbols=params,
+                    lists=_state(handler).lists(),
                 )
             except calc.CalcError as exc:
                 _send_json(handler, 400, {"error": str(exc)})
@@ -431,6 +442,7 @@ def _handle_calc_evaluate(handler):
                 last_entry=_state(handler).ans(),
                 variables=_state(handler).variable_entries(),
                 functions=_state(handler).function_entries(),
+                lists=_state(handler).lists(),
             )
         except calc.CalcError as exc:
             _send_json(handler, 400, {"error": str(exc)})

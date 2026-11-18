@@ -145,6 +145,19 @@
       "pr_url": "https://github.com/NewMe505/graphcalc/pull/50",
       "merged_commit": "99df67eb7cecca168484d620cea9456da4067e0d",
       "usd": 14.7263
+    },
+    {
+      "id": "M10",
+      "title": "CAS tab wired to the CAS endpoints",
+      "status": "done",
+      "branch": "milestone/10",
+      "features": [
+        "P22"
+      ],
+      "pr_number": 52,
+      "pr_url": "https://github.com/NewMe505/graphcalc/pull/52",
+      "merged_commit": "1c0bc2b479f5dc58d85f5c468c6e4a16daac7329",
+      "usd": 3.0286
     }
   ],
   "features": [
@@ -361,12 +374,12 @@
     {
       "id": "P22",
       "description": "The CAS tab is wired to every CAS endpoint.",
-      "status": "todo",
-      "commit": null,
-      "thread": null,
-      "tier": null,
-      "issue": null,
-      "usd": 0.0
+      "status": "done",
+      "commit": "78e587405f923179a7de4d10f891b9c3093969fc",
+      "thread": "build-graphcalc-m4-p22-a1",
+      "tier": "T1",
+      "issue": 51,
+      "usd": 3.0286
     },
     {
       "id": "P23",
@@ -489,5 +502,5 @@
       "usd": 1.6077
     }
   ],
-  "updated": "2026-11-17T22:27:00+00:00"
+  "updated": "2026-11-17T23:04:08+00:00"
 }

@@ -1,6 +1,8 @@
 # Changelog
 
 ## [Unreleased]
+
+## [0.1.0] - 2026-11-18
 ### Added
 - Walking skeleton: package, `--version`, smoke test, CI (SCIO bootstrap).
 - `GET /` serves the static UI shell: one HTML page with the four tab panels

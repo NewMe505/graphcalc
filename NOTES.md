@@ -1,5 +1,6 @@
 # Notes
 
+- M10 CAS tab wired to the CAS endpoints merged by `scio build`: P22 passed; $3.0286.
 - M9 Lists & Statistics tab and CAS algebra/calculus API merged by `scio build`: P18 passed, P19 passed, P20 passed, P21 passed; $14.7263.
 - M8 Asymptote fix, lists, one-var stats and regression merged by `scio build`: P34 passed, P15 failed, P15 passed, P16 passed, P17 passed; $23.7150.
 - M7 Graph analysis, value table and Graphs tab UI merged by `scio build`: P12 passed, P13 passed, P14 passed; $9.5168.
